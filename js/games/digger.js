@@ -32,6 +32,14 @@
     [T.OBSID]: 1500,
     [T.HAZARD]: 300,
   };
+  const PICKAXE_SPEED = [1, 1.35, 1.75, 2.25];
+  const HARDNESS_SPEED_PENALTY = {
+    [T.DIRT]: 0.86,
+    [T.ROCK]: 1,
+    [T.DENSE]: 1.12,
+    [T.OBSID]: 1.28,
+    [T.HAZARD]: 0.75,
+  };
   const LOOT = { coin: 3, gold: 9, gem: 22, diamond: 60 };
   const SHOP = [
     { key: "dig", name: "Pickaxe", emoji: "⛏️", desc: "Break harder rock", costs: [25, 60, 140], max: 4 },
@@ -333,7 +341,10 @@
     }
 
     function digTimeFor(m, type) {
-      return Math.max(120, (DIG_MS[type] || 500) - (m.digLvl || 0) * 200);
+      const base = DIG_MS[type] || 500;
+      const speed = PICKAXE_SPEED[Math.max(0, Math.min(PICKAXE_SPEED.length - 1, m.digLvl || 0))] || 1;
+      const penalty = HARDNESS_SPEED_PENALTY[type] || 1;
+      return Math.max(140, Math.round((base * penalty) / speed));
     }
 
     function diagClear(m, dx, dy) {
@@ -765,20 +776,7 @@
         const x = screenX(mining.x);
         const y = screenY(mining.y);
         const prog = Math.max(0, Math.min(1, (tNow - mining.startedAt) / Math.max(1, mining.required)));
-        ctx.fillStyle = `rgba(0,0,0,${0.12 + prog * 0.24})`;
-        ctx.fillRect(x, y, cell + 1, cell + 1);
-        ctx.strokeStyle = "rgba(20,14,10,0.75)";
-        ctx.lineWidth = Math.max(1.5, cell * 0.045);
-        ctx.beginPath();
-        ctx.moveTo(x + cell * 0.22, y + cell * 0.24);
-        ctx.lineTo(x + cell * (0.42 + prog * 0.28), y + cell * 0.48);
-        ctx.lineTo(x + cell * 0.30, y + cell * (0.70 + prog * 0.1));
-        if (prog > 0.45) {
-          ctx.moveTo(x + cell * 0.62, y + cell * 0.20);
-          ctx.lineTo(x + cell * 0.52, y + cell * 0.55);
-          ctx.lineTo(x + cell * 0.78, y + cell * 0.82);
-        }
-        ctx.stroke();
+        drawCracks(x, y, mining.x, mining.y, prog);
         const bw = cell * 0.68;
         const bx = x + (cell - bw) / 2;
         const by = y + cell * 0.78;
@@ -787,6 +785,47 @@
         ctx.fillStyle = "#ffd35a";
         ctx.fillRect(bx, by, bw * prog, Math.max(3, cell * 0.10));
       }
+    }
+
+    function drawCracks(x, y, col, row, prog) {
+      const seed = Math.abs((col * 928371 + row * 364479) % 997) / 997;
+      const cx = x + cell * (0.45 + (seed - 0.5) * 0.16);
+      const cy = y + cell * (0.42 + (0.5 - seed) * 0.12);
+      const stages = [0.14, 0.28, 0.42, 0.58, 0.74, 0.88];
+      const branches = [
+        [[0, 0], [-0.22, -0.16], [-0.34, -0.28]],
+        [[0, 0], [0.20, -0.14], [0.34, -0.20]],
+        [[0, 0], [-0.10, 0.23], [-0.23, 0.38]],
+        [[0, 0], [0.16, 0.22], [0.31, 0.33]],
+        [[-0.10, 0.23], [-0.03, 0.36], [-0.09, 0.48]],
+        [[0.20, -0.14], [0.28, 0.02], [0.43, 0.08]],
+      ];
+      ctx.save();
+      ctx.fillStyle = `rgba(0,0,0,${0.07 + prog * 0.16})`;
+      ctx.fillRect(x, y, cell + 1, cell + 1);
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      for (let i = 0; i < branches.length; i++) {
+        if (prog < stages[i]) continue;
+        const grow = Math.min(1, (prog - stages[i]) / 0.18);
+        const branch = branches[i];
+        ctx.strokeStyle = i < 2 ? "rgba(18,12,8,0.82)" : "rgba(24,16,10,0.72)";
+        ctx.lineWidth = Math.max(1.2, cell * (0.025 + prog * 0.018));
+        ctx.beginPath();
+        ctx.moveTo(cx + branch[0][0] * cell, cy + branch[0][1] * cell);
+        for (let j = 1; j < branch.length; j++) {
+          const px = branch[j - 1][0] + (branch[j][0] - branch[j - 1][0]) * grow;
+          const py = branch[j - 1][1] + (branch[j][1] - branch[j - 1][1]) * grow;
+          ctx.lineTo(cx + px * cell, cy + py * cell);
+        }
+        ctx.stroke();
+      }
+      if (prog > 0.72) {
+        ctx.fillStyle = "rgba(255,255,255,0.10)";
+        ctx.fillRect(x + cell * 0.18, y + cell * 0.18, cell * 0.10, cell * 0.08);
+        ctx.fillRect(x + cell * 0.67, y + cell * 0.56, cell * 0.08, cell * 0.07);
+      }
+      ctx.restore();
     }
 
     function offX() { return canvas.clientWidth / 2 - (camX + 0.5) * cell; }
