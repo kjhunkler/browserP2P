@@ -156,6 +156,7 @@ function handleHostMsg(peerId, msg) {
   if (msg.t === "hello") {
     const p = addPlayer(msg.id, msg.name, peerId, msg.icon, msg.preferredColor);
     net.sendTo(peerId, { t: "welcome", color: p.color });
+    net.sendTo(peerId, { t: "history", chatLog });
     pushSys(p.name + " joined");
     net.broadcast({ t: "sys", text: p.name + " joined" });
     renderLobby();
@@ -185,6 +186,7 @@ function handleHostMsg(peerId, msg) {
     if (!id) return;
     const entry = { fromId: id, text: msg.text, ts: Date.now() };
     chatLog.push(entry);
+    saveChatLog();
     renderChat();
     net.broadcast({ t: "chat", fromId: id, text: msg.text, ts: entry.ts });
   }
@@ -216,8 +218,15 @@ function handleClientMsg(msg) {
     }
     renderChat();
 
+  } else if (msg.t === "history") {
+    chatLog.length = 0;
+    chatLog.push(...msg.chatLog);
+    saveChatLog();
+    renderChat();
+
   } else if (msg.t === "chat") {
     chatLog.push({ fromId: msg.fromId, text: msg.text, ts: msg.ts });
+    saveChatLog();
     renderChat();
     if (!chatOpen) showChatBadge();
 
@@ -246,12 +255,23 @@ function startHostLoop() {
 }
 
 // ============================================================ CHAT =========
-const chatLog = [];   // { fromId, text, ts } | { sys, text }
+const CHAT_KEY   = "bp2p-chat";
+const CHAT_LIMIT = 500;
+
+function loadChatLog() {
+  try { return JSON.parse(localStorage.getItem(CHAT_KEY) || "[]"); } catch { return []; }
+}
+function saveChatLog() {
+  try { localStorage.setItem(CHAT_KEY, JSON.stringify(chatLog.slice(-CHAT_LIMIT))); } catch {}
+}
+
+const chatLog = loadChatLog();
 let chatOpen   = false;
 let unreadCount = 0;
 
 function pushSys(text) {
   chatLog.push({ sys: true, text });
+  saveChatLog();
   renderChat();
   if (!chatOpen) showChatBadge();
 }
@@ -316,6 +336,7 @@ function sendChat() {
   if (net.isHost) {
     const entry = { fromId: MY_ID, text, ts: Date.now() };
     chatLog.push(entry);
+    saveChatLog();
     renderChat();
     net.broadcast({ t: "chat", fromId: MY_ID, text, ts: entry.ts });
   } else {
