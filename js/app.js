@@ -370,8 +370,9 @@ function renderChat() {
 $("#chat-log").addEventListener("click", (e) => {
   const btn = e.target.closest(".play-btn:not(.expired)");
   if (!btn) return;
-  const url = voiceCache.get(btn.dataset.msgId);
-  if (url) new Audio(url).play().catch(() => {});
+  const cached = voiceCache.get(btn.dataset.msgId);
+  // Replay is user-initiated so HTMLAudio works here on all platforms.
+  if (cached?.url) new Audio(cached.url).play().catch(() => {});
 });
 
 function showChatBadge() {
@@ -417,7 +418,31 @@ function sendChat() {
 }
 
 // ============================================================ VOICE =========
-const voiceCache = new Map(); // msgId -> blob URL (ephemeral — cleared on reload)
+const voiceCache = new Map(); // msgId -> { url, blob } (ephemeral — cleared on reload)
+
+// iOS Safari blocks HTMLAudioElement.play() without a fresh gesture. Fix: use a
+// Web AudioContext that is unlocked once on the first user interaction and stays
+// running for the session. Decode the blob via decodeAudioData to play it.
+let msgAudioCtx = null;
+function ensureMsgAudioCtx() {
+  if (!msgAudioCtx) msgAudioCtx = new AudioContext();
+  if (msgAudioCtx.state === "suspended") msgAudioCtx.resume().catch(() => {});
+  return msgAudioCtx;
+}
+// Unlock on the first touch/click anywhere on the page.
+document.addEventListener("touchend", () => ensureMsgAudioCtx(), { passive: true });
+document.addEventListener("click",    () => ensureMsgAudioCtx(), { passive: true });
+
+async function autoPlayVoice(blob) {
+  const ctx = ensureMsgAudioCtx();
+  try {
+    const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(0);
+  } catch { /* codec not supported on this browser — silently skip */ }
+}
 const MAX_RECORD_MS = 30_000;
 let mediaRecorder  = null;
 let recChunks      = [];
@@ -508,7 +533,7 @@ async function sendVoiceMessage(blob, duration) {
   const mimeType = blob.type;
 
   // Store locally so the sender can replay their own message.
-  voiceCache.set(msgId, URL.createObjectURL(blob));
+  voiceCache.set(msgId, { url: URL.createObjectURL(blob), blob });
 
   const entry = { fromId: MY_ID, voice: true, msgId, duration, ts };
   chatLog.push(entry);
@@ -525,24 +550,26 @@ async function sendVoiceMessage(blob, duration) {
 
 function receiveVoiceMessage(msg) {
   const { fromId, msgId, mimeType, audioB64, duration, ts } = msg;
-  // Sender already added their own entry; skip the echo.
+  // Never play back the sender's own echoed message.
+  if (fromId === MY_ID) return;
+  // Dedup: if we already have this entry (race or reconnect), skip.
   if (chatLog.some((e) => e.voice && e.msgId === msgId)) return;
 
-  // Decode base64 → blob → URL.
+  // Decode base64 → blob → cache.
   const binary = atob(audioB64);
   const bytes  = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   const blob = new Blob([bytes], { type: mimeType || "audio/webm" });
   const url  = URL.createObjectURL(blob);
-  voiceCache.set(msgId, url);
+  voiceCache.set(msgId, { url, blob });
 
   chatLog.push({ fromId, voice: true, msgId, duration, ts });
   saveChatLog();
   renderChat();
   if (!chatOpen) showChatBadge();
 
-  // Auto-play (best-effort — may be blocked by browser autoplay policy).
-  new Audio(url).play().catch(() => {});
+  // Auto-play via Web Audio so it works on iOS Safari (unlocked AudioContext).
+  autoPlayVoice(blob);
 }
 
 // PTT events — shared handler for both the in-chat button and the HUD mic button.
