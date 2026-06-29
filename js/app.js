@@ -15,10 +15,31 @@
 
 // ============================================================ CONSTANTS =====
 const COLORS = [
-  "#ff5d5d", "#4dd2ff", "#7CFC9B", "#ffd24d",
-  "#c98cff", "#ff9d4d", "#4d8bff", "#ff6fd0",
+  // reds & pinks
+  "#ff5d5d", "#ff3366", "#ff4488", "#ff6fd0",
+  // oranges & yellows
+  "#ff9d4d", "#ff8844", "#ffbb33", "#ffd24d",
+  // greens
+  "#c8ee44", "#7CFC9B", "#33ddaa", "#40d9a8",
+  // blues & cyans
+  "#4dd2ff", "#44aaff", "#4d8bff", "#00bbdd",
+  // purples & violets
+  "#7766ff", "#aa44ff", "#c98cff", "#e055ff",
+  // extras
+  "#ff55dd", "#22cc88", "#ff6600", "#5544ee",
 ];
-const ICONS = ["🦊","🐼","🐨","🦁","🐯","🦋","🐬","🦄","🐸","🐙","🐺","🦝"];
+const ICONS = [
+  // animals
+  "🦊","🐼","🐨","🦁","🐯","🐺",
+  "🦝","🦉","🐧","🦋","🐬","🦄",
+  "🐸","🐙","🐻","🦈","🦕","🐮",
+  // fantasy & fun
+  "👾","🤖","👻","🧙","🦸","🎭",
+  // nature & elements
+  "🌙","⭐","🔥","❄️","⚡","🌈",
+  // games & objects
+  "🎮","🎯","🎲","🍕","🌮","🏆",
+];
 const TICK_HZ = 20;
 
 // Channel scopes the auto-join host id. Empty = global default.
