@@ -213,6 +213,18 @@ class PeerNet {
     return this.isHost ? this.conns.size : this.hostConn ? 1 : 0;
   }
 
+  // Re-run the auto election on an existing instance (e.g. after the host
+  // leaves). Tears down the current connection and participates in a new
+  // host election on the same channel, keeping all registered event handlers.
+  migrate(channel) {
+    this.destroy();
+    this.isHost = false;
+    this.code = null;
+    this._autoId = PREFIX + "auto" + (channel ? "-" + channel : "");
+    this.code = this._autoId.slice(PREFIX.length);
+    this._tryJoinThenHost();
+  }
+
   destroy() {
     if (this.peer) this.peer.destroy();
     this.peer = null;

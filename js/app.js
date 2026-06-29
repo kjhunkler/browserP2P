@@ -78,12 +78,19 @@ function addPlayer(id, name, peerId) {
 
 // ============================================================ NET WIRING ====
 net.on("ready", () => {
-  // We're the host. Seed our own player and start the authoritative loop.
-  addPlayer(MY_ID, MY_NAME + " (host)", null);
+  // We're the host — either fresh or elected after the previous host left.
+  if (lastState.length > 0) {
+    // Migration: restore the last known state so returning players keep their
+    // colors and positions. Our own entry is already in lastState.
+    for (const p of lastState) {
+      players.set(p.id, { id: p.id, name: p.name, color: p.color, x: p.x, y: p.y });
+      usedColors.add(p.color);
+    }
+  } else {
+    addPlayer(MY_ID, MY_NAME + " (host)", null);
+  }
   startHostLoop();
   if (autoMode) {
-    // Auto-join: no lobby ceremony — drop straight into play. Joiners appear
-    // as they connect.
     show("play");
   } else {
     renderLobby();
@@ -109,8 +116,15 @@ net.on("connected", () => {
 });
 
 net.on("host-closed", () => {
-  alert("The host left. Game over.");
-  location.reload();
+  if (!autoMode) { alert("The host left. Game over."); location.reload(); return; }
+  // Elect a new host. Each client waits (its position in hostOrder) * 700ms,
+  // then runs the auto election — first in line registers as host, the rest
+  // join them. The well-known id (bp2p-auto) stays the same so everyone finds
+  // the new host without any extra coordination.
+  const myIndex = lastHostOrder.indexOf(MY_ID);
+  const delay = Math.max(0, myIndex) * 700;
+  hostLoopRunning = false; // allow the new host loop to start if we're elected
+  setTimeout(() => net.migrate(AUTO_CHANNEL), delay);
 });
 
 net.on("error", (err) => {
@@ -137,19 +151,30 @@ function handleHostMessage(peerId, msg) {
 
 let myColor = "#fff";
 let lastState = [];
+let lastHostOrder = [];
 function handleClientMessage(msg) {
   if (msg.t === "welcome") myColor = msg.color;
-  else if (msg.t === "state") lastState = msg.players;
+  else if (msg.t === "state") {
+    lastState = msg.players;
+    if (msg.hostOrder) lastHostOrder = msg.hostOrder;
+  }
 }
 
 // ============================================================ HOST LOOP =====
+let hostLoopRunning = false;
 function startHostLoop() {
+  if (hostLoopRunning) return;
+  hostLoopRunning = true;
   setInterval(() => {
     const list = [...players.values()].map((p) => ({
       id: p.id, name: p.name, color: p.color, x: p.x, y: p.y,
     }));
-    net.broadcast({ t: "state", players: list });
-    lastState = list; // host renders from the same authoritative snapshot
+    // hostOrder: clientIds in join time order — clients use this to elect a
+    // new host if we disconnect.
+    const hostOrder = [...players.keys()];
+    net.broadcast({ t: "state", players: list, hostOrder });
+    lastState = list;
+    lastHostOrder = hostOrder;
   }, 1000 / TICK_HZ);
 }
 
