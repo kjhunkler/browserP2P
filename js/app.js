@@ -41,7 +41,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.0.0";
+const APP_VERSION = "2.0.2";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -465,7 +465,11 @@ function handleHostMsg(peerId, msg) {
     remoteVideoIds.set(peerId, id);
     liveVideoPeers.set(id, peerId);
     net.broadcast({ t: "video-on", fromId: id, peerId });
-    callPeerForVideo(peerId);
+    net.sendTo(peerId, { t: "video-request", requesterPeerId: net.peer?.id });
+
+  } else if (msg.t === "video-request") {
+    if (msg.peerId === net.peer?.id && cameraStream) callPeerForVideo(peerId);
+    else if (msg.peerId) net.sendTo(msg.peerId, { t: "video-request", requesterPeerId: peerId });
 
   } else if (msg.t === "video-off") {
     const id = peerMap.get(peerId);
@@ -535,8 +539,11 @@ function handleClientMsg(msg) {
   } else if (msg.t === "video-on") {
     if (msg.fromId !== MY_ID) {
       remoteVideoIds.set(msg.peerId, msg.fromId);
-      callPeerForVideo(msg.peerId, msg.fromId);
+      requestVideoFromPeer(msg.peerId, msg.fromId);
     }
+
+  } else if (msg.t === "video-request") {
+    if (cameraStream && msg.requesterPeerId) callPeerForVideo(msg.requesterPeerId);
 
   } else if (msg.t === "video-off") {
     liveVideoPeers.delete(msg.fromId);
@@ -546,7 +553,7 @@ function handleClientMsg(msg) {
     for (const live of msg.live || []) {
       if (live.fromId !== MY_ID) {
         remoteVideoIds.set(live.peerId, live.fromId);
-        callPeerForVideo(live.peerId, live.fromId);
+        requestVideoFromPeer(live.peerId, live.fromId);
       }
     }
 
@@ -1190,18 +1197,28 @@ function liveVideoList() {
 }
 
 function callPeerForVideo(peerId, clientId = null) {
-  if (!peerId) return;
-  const call = net.call(peerId, cameraStream || new MediaStream());
+  if (!peerId || !cameraStream) return;
+  const call = net.call(peerId, cameraStream);
   if (!call) return;
   if (clientId) remoteVideoIds.set(peerId, clientId);
   call.on("stream", (stream) => addVideoTile(remoteVideoIds.get(peerId) || clientId || peerId, stream));
   call.on("close", () => removeVideoTile(remoteVideoIds.get(peerId) || clientId || peerId));
 }
 
+function requestVideoFromPeer(peerId, clientId) {
+  if (!peerId) return;
+  remoteVideoIds.set(peerId, clientId || peerId);
+  if (net.isHost) {
+    if (peerId === net.peer?.id && cameraStream) return;
+    else net.sendTo(peerId, { t: "video-request", requesterPeerId: net.peer?.id });
+  } else {
+    net.send({ t: "video-request", peerId });
+  }
+}
+
 function handleMediaCall(call) {
   if (net.isHost && peerMap.get(call.peer)) remoteVideoIds.set(call.peer, peerMap.get(call.peer));
-  if (cameraStream) call.answer(cameraStream);
-  else call.answer(new MediaStream());
+  call.answer(new MediaStream());
   call.on("stream", (stream) => addVideoTile(remoteVideoIds.get(call.peer) || call.peer, stream));
   call.on("close", () => removeVideoTile(remoteVideoIds.get(call.peer) || call.peer));
 }
