@@ -41,7 +41,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.0.2";
+const APP_VERSION = "2.0.3";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -293,6 +293,7 @@ let net = new PeerNet();
 let autoMode = true;
 let hasLeftLobby = false;
 let migratingFromHostId = null;
+let keepPlayingAfterMigration = false;
 
 // ============================================================ DOM ===========
 const $ = (sel) => document.querySelector(sel);
@@ -351,7 +352,8 @@ function wireNetEvents() {
     migratingFromHostId = null;
     startHostLoop();
     renderLobby();
-    show("lobby");
+    show(keepPlayingAfterMigration ? "play" : "lobby");
+    keepPlayingAfterMigration = false;
   });
 
   net.on("peer-join", () => renderLobby());
@@ -375,12 +377,14 @@ function wireNetEvents() {
 
   net.on("connected", () => {
     net.send({ t: "hello", id: MY_ID, name: profile.name, icon: profile.icon, preferredColor: profile.color });
-    show("lobby");
+    show(keepPlayingAfterMigration ? "play" : "lobby");
+    keepPlayingAfterMigration = false;
   });
 
   net.on("host-closed", () => {
     if (hasLeftLobby) return;
     if (!autoMode) { alert("The host left. Game over."); location.reload(); return; }
+    keepPlayingAfterMigration = screens.play.classList.contains("active");
     migratingFromHostId = lastHostOrder[0] || null;
     const remainingOrder = migratingFromHostId ? lastHostOrder.filter((id) => id !== migratingFromHostId) : [MY_ID];
     const myIndex = remainingOrder.indexOf(MY_ID);
@@ -597,6 +601,7 @@ function stopHostLoop() {
 function joinCode(code) {
   autoMode = false;
   hasLeftLobby = false;
+  keepPlayingAfterMigration = false;
   setStatus("Connecting…");
   renderLobby();
   show("lobby");
@@ -1299,6 +1304,7 @@ function closeProfileSheet() {
 function leaveLobby() {
   hasLeftLobby = true;
   autoMode = false;
+  keepPlayingAfterMigration = false;
   stopHostLoop();
   stopLiveVoice();
   stopCamera();
@@ -1609,6 +1615,7 @@ $("#btn-host").addEventListener("click", () => {
   wireNetEvents();
   autoMode = false;
   hasLeftLobby = false;
+  keepPlayingAfterMigration = false;
   players.clear();
   peerMap.clear();
   liveVideoPeers.clear();
