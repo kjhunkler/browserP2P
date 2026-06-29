@@ -15,6 +15,7 @@
 
     <!-- ===== Menu ===== -->
     <section id="screen-menu" class="screen active">
+      <button id="btn-menu-settings" class="hud-btn hud-top-left" aria-label="Settings">⚙️</button>
       <h1 class="title">browser<span>P2P</span></h1>
       <p class="tagline">Phone-to-phone over your Wi-Fi. Joining lobby…</p>
 
@@ -51,6 +52,7 @@
     <section id="screen-play" class="screen">
       <canvas id="stage"></canvas>
       <button id="btn-profile" class="hud-btn hud-top-left" aria-label="Settings">⚙️</button>
+      <button id="btn-draw" class="hud-btn hud-bottom-left" aria-label="Draw mode" type="button">✏️</button>
       <button id="btn-mic"  class="hud-btn hud-bottom-right-2" aria-label="Record voice" type="button">🎤</button>
       <button id="btn-chat" class="hud-btn hud-bottom-right"  aria-label="Chat">
         💬<span id="chat-badge" class="badge hidden">0</span>
@@ -68,7 +70,7 @@
     <div class="field-group app-update-group">
       <label>App</label>
       <div class="version-row">
-        <span>Version <strong id="app-version">1.7.0</strong></span>
+        <span>Version <strong id="app-version">1.7.2</strong></span>
         <button id="btn-check-update" class="btn btn-small" type="button">Check for updates</button>
         <button id="btn-leave-lobby" class="btn btn-small btn-danger" type="button">Leave lobby</button>
       </div>

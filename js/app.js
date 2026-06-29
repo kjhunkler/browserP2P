@@ -41,7 +41,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "1.7.0";
+const APP_VERSION = "1.7.2";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -609,7 +609,7 @@ function renderDrawing(rect) {
 
 function setDrawMode(enabled) {
   drawMode = enabled;
-  $("#btn-draw").classList.toggle("active", drawMode);
+  $("#btn-draw")?.classList.toggle("active", drawMode);
 }
 
 function pushSys(text) {
@@ -1348,7 +1348,7 @@ $("#btn-join").addEventListener("click", () => {
 });
 
 $("#btn-start").addEventListener("click", () => show("play"));
-$("#btn-draw").addEventListener("click", () => setDrawMode(!drawMode));
+$("#btn-draw")?.addEventListener("click", () => setDrawMode(!drawMode));
 
 // Auto-join from QR link (?join=CODE).
 const joinParam = new URLSearchParams(location.search).get("join");
@@ -1358,6 +1358,7 @@ if (autoJoinCode) $("#code-input").value = autoJoinCode;
 // ============================================================ PROFILE ACTIONS
 $("#btn-profile").addEventListener("click", openProfileSheet);
 $("#btn-lobby-settings").addEventListener("click", openProfileSheet);
+$("#btn-menu-settings")?.addEventListener("click", openProfileSheet);
 $("#btn-close-profile").addEventListener("click", closeProfileSheet);
 $("#app-version").textContent = APP_VERSION;
 $("#btn-check-update").addEventListener("click", checkForUpdates);
