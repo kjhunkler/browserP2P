@@ -9,7 +9,9 @@
   const SKY_ROWS = 2;
   const TOPSOIL = 6;
   const STARTER_LOOT = 120;
+  const ENTER_DELAY_MS = 160;
   const SNAPSHOT_HZ = 12;
+  const FULL_SNAPSHOT_MARGIN_ROWS = 12;
 
   const T = {
     EMPTY: 0,
@@ -56,6 +58,9 @@
     const world = new Map();
     const miners = new Map();
     const dirtyTiles = new Set();
+    let generatedMaxY = SURFACE_Y - SKY_ROWS - 1;
+    let lastFullSnapshot = null;
+    let lastFullSnapshotDirty = true;
 
     function key(x, y) { return x + "," + y; }
     function fromKey(k) {
@@ -109,12 +114,21 @@
         tile = genTile(x, y);
         world.set(k, tile);
       }
+      if (y > generatedMaxY && x >= -1 && x <= COLS) generatedMaxY = y;
       return tile;
     }
 
     function setTile(x, y, tile) {
       world.set(key(x, y), tile);
       dirtyTiles.add(key(x, y));
+      lastFullSnapshotDirty = true;
+    }
+
+    function ensureGeneratedTo(maxY) {
+      if (maxY <= generatedMaxY) return;
+      for (let y = Math.max(SURFACE_Y - SKY_ROWS, generatedMaxY + 1); y <= maxY; y++) {
+        for (let x = -1; x <= COLS; x++) tileAt(x, y);
+      }
     }
 
     function seedTopsoil() {
@@ -122,22 +136,10 @@
       for (let y = 1; y <= TOPSOIL; y++) {
         for (let x = 0; x < COLS; x++) {
           world.set(key(x, y), { type: T.DIRT, loot: 0 });
+          generatedMaxY = Math.max(generatedMaxY, y);
           cells.push({ x, y });
         }
       }
-
-    function currentSnapshot() {
-      if (isHost()) return makeSnapshot(true);
-      return {
-        full: true,
-        tiles: [...world.keys()].map((k) => {
-          const p = fromKey(k);
-          const t = world.get(k);
-          return [p.x, p.y, t.type, t.loot || 0];
-        }),
-        players: [...miners.values()].map((m) => ({ ...m })),
-      };
-    }
       for (let i = cells.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [cells[i], cells[j]] = [cells[j], cells[i]];
@@ -184,6 +186,7 @@
           hp: 3,
           stam: 20,
           ladders: 5,
+          moveLockUntil: 0,
           dead: false,
           msg: "Ready",
           msgUntil: 0,
@@ -200,6 +203,9 @@
       world.clear();
       miners.clear();
       dirtyTiles.clear();
+      generatedMaxY = SURFACE_Y - SKY_ROWS - 1;
+      lastFullSnapshot = null;
+      lastFullSnapshotDirty = true;
       seedTopsoil();
       for (const p of host.getPlayers()) ensureMiner(p.id);
       latest = makeSnapshot(true);
@@ -207,12 +213,20 @@
 
     function syncPlayerList() {
       if (!isHost()) return;
+      let changed = false;
       const ids = new Set(host.getPlayers().map((p) => p.id));
       ids.add(myId);
-      for (const id of ids) ensureMiner(id);
-      for (const id of [...miners.keys()]) {
-        if (!ids.has(id)) miners.delete(id);
+      for (const id of ids) {
+        if (!miners.has(id)) changed = true;
+        ensureMiner(id);
       }
+      for (const id of [...miners.keys()]) {
+        if (!ids.has(id)) {
+          miners.delete(id);
+          changed = true;
+        }
+      }
+      if (changed) lastFullSnapshotDirty = true;
     }
 
     function setMsg(m, text, ms) {
@@ -227,8 +241,15 @@
     }
 
     function isOpen(x, y) {
+      if (x < 0 || x >= COLS) return false;
       const t = tileAt(x, y).type;
       return t === T.EMPTY || t === T.LADDER;
+    }
+
+    function diagClear(m, dx, dy) {
+      if (dx === 0 || dy === 0) return true;
+      if (dy < 0) return isOpen(m.x, m.y + dy);
+      return isOpen(m.x + dx, m.y);
     }
 
     function settle(m) {
@@ -287,37 +308,36 @@
       const ny = m.y + dy;
       if (nx < 0 || nx >= COLS || ny < SURFACE_Y) return;
 
+      if (ny <= SURFACE_Y) {
+        m.x = nx;
+        m.y = ny;
+        enterTile(m);
+        return;
+      }
+
+      const t = tileAt(nx, ny);
+
+      if (dx === 0 && dy === -1 && t.type === T.EMPTY && tileAt(m.x, m.y).type !== T.LADDER) {
+        const ry = ny - 1;
+        if (ry > SURFACE_Y && !isOpen(nx, ry)) mineTile(m, nx, ry, false);
+        return;
+      }
+
+      if (dx !== 0 && dy !== 0 && !diagClear(m, dx, dy)) {
+        mineTile(m, m.x, ny, false);
+        return;
+      }
+
       if (isOpen(nx, ny)) {
         m.x = nx;
         m.y = ny;
         enterTile(m);
         settle(m);
+        m.moveLockUntil = now() + ENTER_DELAY_MS;
         return;
       }
 
-      const t = tileAt(nx, ny);
-      if (t.type === T.BEDROCK) return;
-      if (m.stam <= 0) {
-        setMsg(m, "Out of stamina. Climb up.", 1800);
-        return;
-      }
-      if ((HARD[t.type] || 1) > m.dig && t.type !== T.HAZARD) {
-        setMsg(m, "Rock too hard. Upgrade pickaxe.", 1800);
-        return;
-      }
-
-      m.stam--;
-      setTile(nx, ny, { type: T.EMPTY, loot: 0 });
-      if (t.type === T.HAZARD) {
-        damage(m, 1, "Gas pocket");
-      } else if (t.loot) {
-        collect(m, t.loot);
-      }
-
-      m.x = nx;
-      m.y = ny;
-      enterTile(m);
-      settle(m);
+      mineTile(m, nx, ny, true);
     }
 
     function placeLadder(id) {
@@ -350,6 +370,7 @@
         hp: maxHp(m),
         stam: maxStam(m),
         ladders: Math.max(m.ladders, 3),
+        moveLockUntil: 0,
         dead: false,
         banked,
       });
@@ -384,6 +405,35 @@
       setMsg(m, item.name + " upgraded", 1200);
     }
 
+    function mineTile(m, nx, ny, movesInto = true) {
+      if (now() < (m.moveLockUntil || 0)) return;
+      const t = tileAt(nx, ny);
+      if (t.type === T.BEDROCK) return;
+      if (m.stam <= 0) {
+        setMsg(m, "Out of stamina. Climb up.", 1800);
+        return;
+      }
+      if ((HARD[t.type] || 1) > m.dig && t.type !== T.HAZARD) {
+        setMsg(m, "Rock too hard. Upgrade pickaxe.", 1800);
+        return;
+      }
+
+      m.stam--;
+      setTile(nx, ny, { type: T.EMPTY, loot: 0 });
+      if (t.type === T.HAZARD) {
+        damage(m, 1, "Gas pocket");
+      } else if (t.loot) {
+        collect(m, t.loot);
+      }
+
+      if (movesInto) {
+        m.x = nx;
+        m.y = ny;
+        enterTile(m);
+        settle(m);
+      }
+    }
+
     function handleAction(id, action) {
       if (!isHost() || !action) return;
       if (action.type === "move") moveMiner(id, action.dx, action.dy);
@@ -405,18 +455,17 @@
 
     function makeSnapshot(full) {
       syncPlayerList();
-      const maxY = Math.max(16, ...[...miners.values()].map((m) => m.y + 12));
-      for (let y = SURFACE_Y - SKY_ROWS; y <= maxY; y++) {
-        for (let x = -1; x <= COLS; x++) tileAt(x, y);
-      }
+      const maxY = Math.max(16, ...[...miners.values()].map((m) => m.y + FULL_SNAPSHOT_MARGIN_ROWS));
+      if (maxY > generatedMaxY) lastFullSnapshotDirty = true;
+      ensureGeneratedTo(maxY);
+      if (full && lastFullSnapshot && !lastFullSnapshotDirty) return lastFullSnapshot;
       const tileKeys = full ? [...world.keys()] : [...dirtyTiles];
       const tiles = tileKeys.map((k) => {
         const p = fromKey(k);
         const t = world.get(k);
         return [p.x, p.y, t.type, t.loot || 0];
       });
-      dirtyTiles.clear();
-      return {
+      const snapshot = {
         full: !!full,
         tiles,
         players: [...miners.values()].map((m) => ({
@@ -437,6 +486,7 @@
           hpLvl: m.hpLvl,
           hp: m.hp,
           stam: m.stam,
+          moveLockUntil: m.moveLockUntil || 0,
           maxHp: maxHp(m),
           maxStam: maxStam(m),
           bagCap: bagCap(m),
@@ -446,19 +496,42 @@
           msgActive: m.msgUntil > now(),
         })),
       };
+      dirtyTiles.clear();
+      if (full) {
+        lastFullSnapshot = snapshot;
+        lastFullSnapshotDirty = false;
+      }
+      return snapshot;
     }
 
     function applySnapshot(s) {
       if (!s) return;
       latest = s;
-      if (s.full) world.clear();
+      if (s.full) {
+        world.clear();
+        generatedMaxY = SURFACE_Y - SKY_ROWS - 1;
+      }
       for (const row of s.tiles || []) {
         world.set(key(row[0], row[1]), { type: row[2], loot: row[3] || 0 });
+        if (row[1] > generatedMaxY && row[0] >= -1 && row[0] <= COLS) generatedMaxY = row[1];
       }
       if (s.players) {
         miners.clear();
         for (const p of s.players) miners.set(p.id, { ...p });
       }
+    }
+
+    function currentSnapshot() {
+      if (isHost()) return makeSnapshot(true);
+      return {
+        full: true,
+        tiles: [...world.keys()].map((k) => {
+          const p = fromKey(k);
+          const t = world.get(k);
+          return [p.x, p.y, t.type, t.loot || 0];
+        }),
+        players: [...miners.values()].map((m) => ({ ...m })),
+      };
     }
 
     function broadcastSnapshot(full) {
@@ -802,6 +875,9 @@
       },
       destroy() {
         cancelAnimationFrame(rafId);
+        if (activePointerId !== null && canvas.hasPointerCapture?.(activePointerId)) canvas.releasePointerCapture(activePointerId);
+        activePointerId = null;
+        drag = null;
         window.removeEventListener("resize", resize);
         if (window.PointerEvent) {
           canvas.removeEventListener("pointerdown", onPointerDown);

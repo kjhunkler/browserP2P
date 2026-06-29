@@ -43,10 +43,27 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.1.3";
+const APP_VERSION = "2.1.6";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
+
+const PERF_WARN_MS = 50;
+
+function profileTask(label, fn) {
+  const start = performance.now();
+  try {
+    return fn();
+  } finally {
+    const elapsed = performance.now() - start;
+    if (elapsed >= PERF_WARN_MS) console.warn(`[perf] ${label} blocked for ${elapsed.toFixed(1)}ms`);
+  }
+}
+
+function runWhenIdle(fn, timeout = 1200) {
+  if ("requestIdleCallback" in window) requestIdleCallback(fn, { timeout });
+  else setTimeout(fn, 0);
+}
 
 // ============================================================ PWA ===========
 let swRegistration = null;
@@ -362,11 +379,11 @@ function wireNetEvents() {
     if (selectedGame !== "free-play") {
       if (!activeGame) await startActiveGame(pendingMigratedGameState || loadSavedGameState(selectedGame)?.state || null).catch(console.error);
       else if (pendingMigratedGameState) activeGame.onState?.(pendingMigratedGameState);
-      const state = snapshotActiveGame();
+      const state = snapshotActiveGame("host ready migration snapshot");
       if (state) {
-        saveGameState(selectedGame, state);
+        queueGameStateSave(selectedGame, state);
         net.broadcast({ t: "game-mode", game: selectedGame });
-        net.broadcast({ t: "game-state", game: selectedGame, state });
+        sendGameState({ game: selectedGame, state, fullOnly: true });
       }
     }
     pendingMigratedGameState = null;
@@ -408,7 +425,7 @@ function wireNetEvents() {
     if (!autoMode) { alert("The host left. Game over."); location.reload(); return; }
     keepPlayingAfterMigration = screens.play.classList.contains("active");
     migratingFromHostId = lastHostOrder[0] || null;
-    pendingMigratedGameState = activeGame?.getSnapshot?.() || loadSavedGameState(selectedGame)?.state || null;
+    pendingMigratedGameState = snapshotActiveGame("host migration snapshot") || loadSavedGameState(selectedGame)?.state || null;
     const remainingOrder = migratingFromHostId ? lastHostOrder.filter((id) => id !== migratingFromHostId) : [MY_ID];
     const myIndex = remainingOrder.indexOf(MY_ID);
     if (myIndex < 0) return;
@@ -656,7 +673,7 @@ function yieldHostForBackground() {
   if (net.peerCount() === 0) return;
   yieldedHostForBackground = true;
   keepPlayingAfterMigration = screens.play.classList.contains("active");
-  const state = activeGame?.getSnapshot?.();
+  const state = snapshotActiveGame("yield host snapshot");
   if (state) saveGameState(selectedGame, state);
   stopHostLoop();
   net.destroy();
@@ -893,20 +910,34 @@ function loadSavedGameState(game) {
 
 function saveGameState(game, state) {
   if (!game || game === "free-play" || !state) return;
-  try { localStorage.setItem(gameSaveKey(game), JSON.stringify({ savedAt: Date.now(), state })); } catch {}
+  profileTask(`saveGameState(${game})`, () => {
+    try { localStorage.setItem(gameSaveKey(game), JSON.stringify({ savedAt: Date.now(), state })); } catch {}
+  });
 }
 
 const gameSaveTimers = new Map();
 const GAME_SAVE_DEBOUNCE_MS = 2500;
+const pendingGameSaves = new Map();
 
-function snapshotActiveGame() {
-  return activeGame?.getSnapshot?.() || null;
+function snapshotActiveGame(reason = "snapshotActiveGame") {
+  return activeGame?.getSnapshot ? profileTask(reason, () => activeGame.getSnapshot()) : null;
 }
 
-function saveActiveGameStateNow() {
-  const state = snapshotActiveGame();
+function saveActiveGameStateNow(reason = "saveActiveGameStateNow") {
+  const state = snapshotActiveGame(`${reason}:getSnapshot`);
   if (state) saveGameState(selectedGame, state);
   return state;
+}
+
+function queueGameStateSave(game, state) {
+  if (!game || game === "free-play" || !state) return;
+  pendingGameSaves.set(game, state);
+  runWhenIdle(() => {
+    const latestState = pendingGameSaves.get(game);
+    if (!latestState) return;
+    pendingGameSaves.delete(game);
+    saveGameState(game, latestState);
+  });
 }
 
 function scheduleActiveGameSave() {
@@ -915,9 +946,15 @@ function scheduleActiveGameSave() {
   clearTimeout(gameSaveTimers.get(game));
   gameSaveTimers.set(game, setTimeout(() => {
     if (selectedGame !== game || !activeGame) return;
-    const state = snapshotActiveGame();
-    if (state) saveGameState(game, state);
+    const state = snapshotActiveGame(`debounced save ${game}`);
+    if (state) queueGameStateSave(game, state);
   }, GAME_SAVE_DEBOUNCE_MS));
+}
+
+function clearPendingGameSave(game) {
+  clearTimeout(gameSaveTimers.get(game));
+  gameSaveTimers.delete(game);
+  pendingGameSaves.delete(game);
 }
 
 function clearSavedGameState(game) {
@@ -946,7 +983,7 @@ async function setGameMode(game, broadcast = true, restoredState = undefined, pr
   const select = $("#game-select");
   if (select && select.value !== selectedGame) select.value = selectedGame;
   if (selectedGame !== "free-play") setDrawMode(false);
-  else setDrawMode(drawMode);
+  else enterFreePlayMode();
   const initialState = restoredState !== undefined
     ? restoredState
     : (promptHost && net.isHost ? promptForSavedGame(selectedGame) : null);
@@ -976,9 +1013,22 @@ function gameHostApi() {
     broadcastState: (state) => {
       if (!activeGame || selectedGame === "free-play" || !net.isHost) return;
       scheduleActiveGameSave();
-      net.broadcast({ t: "game-state", game: selectedGame, state });
+      sendGameState({ game: selectedGame, state });
     },
   };
+}
+
+function sendGameState({ game, state, peerId = null, fullOnly = false }) {
+  if (!game || game === "free-play" || !state) return;
+  const msg = { t: "game-state", game, state };
+  const send = () => {
+    profileTask(peerId ? `send game-state ${game} to peer` : `broadcast game-state ${game}`, () => {
+      if (peerId) net.sendTo(peerId, msg);
+      else net.broadcast(msg);
+    });
+  };
+  if (fullOnly && state.full) setTimeout(send, 0);
+  else send();
 }
 
 const GAME_SCRIPTS = {
@@ -1036,18 +1086,29 @@ async function startActiveGame(initialState = null, token = gameModeToken) {
     activeGame.onState?.(initialState);
   }
   if (net.isHost) {
-    const state = activeGame.getSnapshot?.();
+    const state = snapshotActiveGame(`start ${selectedGame} snapshot`);
     if (state) {
-      saveGameState(selectedGame, state);
-      net.broadcast({ t: "game-state", game: selectedGame, state });
+      queueGameStateSave(selectedGame, state);
+      sendGameState({ game: selectedGame, state, fullOnly: true });
     }
   }
 }
 
 function stopActiveGame() {
-  saveActiveGameStateNow();
+  const game = selectedGame;
+  clearPendingGameSave(game);
+  saveActiveGameStateNow(`stop ${game}`);
   activeGame?.destroy?.();
   activeGame = null;
+}
+
+function enterFreePlayMode() {
+  drawing = false;
+  currentStroke = null;
+  dragging = false;
+  setDrawMode(false);
+  syncCanvasSize();
+  renderFreePlayFrame();
 }
 
 function handleGameInput(id, game, input) {
@@ -1056,6 +1117,7 @@ function handleGameInput(id, game, input) {
 }
 
 function handleGameState(game, state) {
+  if (selectedGame === "free-play") return;
   if (game !== selectedGame || !activeGame) {
     if (game) pendingGameStates.set(game, state);
     return;
@@ -1073,8 +1135,8 @@ function queueGameStateForPeer(peerId) {
   let attempts = 0;
   const sendWhenReady = () => {
     if (selectedGame === "free-play" || !activeGame) return;
-    const state = snapshotActiveGame();
-    if (state) net.sendTo(peerId, { t: "game-state", game: selectedGame, state });
+    const state = snapshotActiveGame(`join snapshot ${selectedGame}`);
+    if (state) sendGameState({ game: selectedGame, state, peerId, fullOnly: true });
     else if (attempts++ < 10) setTimeout(sendWhenReady, 250);
   };
   setTimeout(sendWhenReady, 0);
@@ -1899,11 +1961,7 @@ canvas.addEventListener("touchmove",  onMove, { passive: false });
 window.addEventListener("touchend",   onUp);
 window.addEventListener("touchcancel", onUp);
 
-function render() {
-  if (selectedGame !== "free-play") {
-    requestAnimationFrame(render);
-    return;
-  }
+function renderFreePlayFrame() {
   const rect = syncCanvasSize();
   ctx.clearRect(0, 0, rect.width, rect.height);
   renderDrawing(rect);
@@ -1946,6 +2004,10 @@ function render() {
     ctx.fillStyle     = "rgba(255,255,255,0.85)";
     ctx.fillText(hostCrown(p.id) + p.name, x, y - 32);
   }
+}
+
+function render() {
+  if (selectedGame === "free-play") renderFreePlayFrame();
 
   requestAnimationFrame(render);
 }
