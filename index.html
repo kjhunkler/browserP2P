@@ -46,9 +46,50 @@
     <!-- ===== Play ===== -->
     <section id="screen-play" class="screen">
       <canvas id="stage"></canvas>
-      <p class="hint">Drag your dot. Everyone sees everyone move.</p>
+      <button id="btn-profile" class="hud-btn hud-top-left" aria-label="Profile">🎨</button>
+      <button id="btn-chat"    class="hud-btn hud-bottom-right" aria-label="Chat">
+        💬<span id="chat-badge" class="badge hidden">0</span>
+      </button>
     </section>
 
+  </div>
+
+  <!-- ===== Profile sheet (slides in from right) ===== -->
+  <div id="sheet-profile" class="sheet" aria-hidden="true">
+    <div class="sheet-header">
+      <h2>Your Profile</h2>
+      <button id="btn-close-profile" class="close-btn" aria-label="Close">✕</button>
+    </div>
+    <div class="profile-preview-row">
+      <div id="preview-dot" class="preview-dot"></div>
+      <span id="preview-name" class="preview-name"></span>
+    </div>
+    <div class="field-group">
+      <label for="input-name">Name</label>
+      <input id="input-name" type="text" class="text-input" maxlength="20" autocomplete="off" />
+    </div>
+    <div class="field-group">
+      <label>Color</label>
+      <div id="picker-color" class="swatch-grid"></div>
+    </div>
+    <div class="field-group">
+      <label>Icon</label>
+      <div id="picker-icon" class="icon-grid"></div>
+    </div>
+  </div>
+
+  <!-- ===== Chat panel (slides up from bottom) ===== -->
+  <div id="panel-chat" class="chat-panel" aria-hidden="true">
+    <div class="chat-header">
+      <span>Chat</span>
+      <button id="btn-close-chat" class="close-btn" aria-label="Close">✕</button>
+    </div>
+    <div id="chat-log" class="chat-log"></div>
+    <div class="chat-input-row">
+      <input id="chat-input" type="text" class="chat-text-input"
+             placeholder="Message…" maxlength="200" autocomplete="off" />
+      <button id="btn-send" class="btn btn-primary send-btn">↑</button>
+    </div>
   </div>
 
   <!-- WebRTC wrapper + free signaling broker -->

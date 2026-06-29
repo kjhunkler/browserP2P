@@ -1,26 +1,30 @@
 /*
- * app.js — the demo game layered on top of peer-net.js.
- *
- * It's deliberately trivial: every connected phone gets a colored dot it can
- * drag. The HOST runs an authoritative ~20Hz loop, collects everyone's input,
- * and broadcasts the full state; every phone renders what the host sends. This
- * exercises the whole multiplayer skeleton (discovery, join, host-authority,
- * broadcast, reconnect) without committing to a real game design.
+ * app.js — demo game + chat + profile on top of peer-net.js.
  *
  * Protocol:
- *   client -> host : { t:'hello', id, name }      on connect
- *                    { t:'input', x, y }          on drag (normalized 0..1)
- *   host -> client : { t:'welcome', color }       on join
- *                    { t:'state', players:[...] } every tick
+ *   client -> host : { t:'hello', id, name, icon, preferredColor }   on connect
+ *                    { t:'input', x, y }                             on drag
+ *                    { t:'profile', name, icon, preferredColor }     on profile change
+ *                    { t:'chat', text }                              on send
+ *   host -> all   : { t:'state', players, hostOrder }               every tick
+ *                    { t:'profile', id, name, color, icon }         on profile update
+ *                    { t:'chat', fromId, text, ts }                 on chat
+ *                    { t:'sys', text }                              join/leave notices
+ *   host -> joiner: { t:'welcome', color }                          on join
  */
 
+// ============================================================ CONSTANTS =====
 const COLORS = [
   "#ff5d5d", "#4dd2ff", "#7CFC9B", "#ffd24d",
   "#c98cff", "#ff9d4d", "#4d8bff", "#ff6fd0",
 ];
+const ICONS = ["🦊","🐼","🐨","🦁","🐯","🦋","🐬","🦄","🐸","🐙","🐺","🦝"];
 const TICK_HZ = 20;
 
-// Stable per-device identity so a dropped player reclaims its slot on rejoin.
+// Channel scopes the auto-join host id. Empty = global default.
+const AUTO_CHANNEL = "";
+
+// ============================================================ IDENTITY ======
 function clientId() {
   let id = localStorage.getItem("bp2p-client-id");
   if (!id) {
@@ -31,99 +35,109 @@ function clientId() {
 }
 
 const MY_ID = clientId();
-const MY_NAME = "Player " + MY_ID.slice(2, 5).toUpperCase();
 
+// Default icon: deterministic from the last two chars of MY_ID so it's stable
+// without an extra localStorage entry, but changes if the user picks another.
+const DEFAULT_ICON = ICONS[parseInt(MY_ID.slice(-2), 36) % ICONS.length];
+const DEFAULT_NAME = "Player " + MY_ID.slice(2, 5).toUpperCase();
+
+// Profile: persisted to localStorage, reflected live to all peers.
+const profile = {
+  name:  localStorage.getItem("bp2p-name")  || DEFAULT_NAME,
+  icon:  localStorage.getItem("bp2p-icon")  || DEFAULT_ICON,
+  color: localStorage.getItem("bp2p-color") || "",   // preferred; host may reassign
+};
+
+// myColor: the actual color the host assigned (may differ from preference).
+let myColor = profile.color || COLORS[0];
+
+// profiles: id -> { name, color, icon } for every connected player.
+// Used to render chat bubbles retroactively when a profile changes.
+const profiles = new Map();
+profiles.set(MY_ID, { name: profile.name, color: myColor, icon: profile.icon });
+
+// ============================================================ NET ==========
 const net = new PeerNet();
-
-// Channel scopes the well-known auto-join host id. Empty = the global default,
-// which is fine when you only run one game per network. Set it (e.g. a family
-// name) only if you ever need to avoid colliding with other users worldwide.
-const AUTO_CHANNEL = "";
 let autoMode = false;
 
-// ---- DOM ----
+// ============================================================ DOM ===========
 const $ = (sel) => document.querySelector(sel);
-const screens = {
-  menu: $("#screen-menu"),
-  lobby: $("#screen-lobby"),
-  play: $("#screen-play"),
-};
+const screens = { menu: $("#screen-menu"), lobby: $("#screen-lobby"), play: $("#screen-play") };
 function show(name) {
   for (const key in screens) screens[key].classList.toggle("active", key === name);
 }
 
 // ============================================================ HOST STATE ====
-// Keyed by clientId. peerMap maps a transport peerId -> clientId so we can drop
-// the right player when a connection closes.
-const players = new Map();
-const peerMap = new Map();
+const players  = new Map();   // id -> { id, name, color, icon, x, y }
+const peerMap  = new Map();   // transport peerId -> clientId
 let usedColors = new Set();
 
 function pickColor() {
   for (const c of COLORS) if (!usedColors.has(c)) { usedColors.add(c); return c; }
-  return COLORS[Math.floor(Math.random() * COLORS.length)]; // ran out — reuse
+  return COLORS[Math.floor(Math.random() * COLORS.length)];
 }
 
-function addPlayer(id, name, peerId) {
+function addPlayer(id, name, peerId, icon, preferredColor) {
   if (players.has(id)) {
-    // Rejoin: keep color/position, just rebind the transport peer.
     if (peerId) peerMap.set(peerId, id);
     return players.get(id);
   }
-  const p = { id, name, color: pickColor(), x: 0.5, y: 0.5 };
+  let color;
+  if (preferredColor && !usedColors.has(preferredColor)) {
+    color = preferredColor;
+    usedColors.add(color);
+  } else {
+    color = pickColor();
+  }
+  const p = { id, name, color, icon: icon || DEFAULT_ICON, x: 0.5, y: 0.5 };
   players.set(id, p);
   if (peerId) peerMap.set(peerId, id);
+  profiles.set(id, { name: p.name, color: p.color, icon: p.icon });
   return p;
 }
 
 // ============================================================ NET WIRING ====
 net.on("ready", () => {
-  // We're the host — either fresh or elected after the previous host left.
   if (lastState.length > 0) {
-    // Migration: restore the last known state so returning players keep their
-    // colors and positions. Our own entry is already in lastState.
+    // Host migration: restore last snapshot so players keep colors and positions.
     for (const p of lastState) {
-      players.set(p.id, { id: p.id, name: p.name, color: p.color, x: p.x, y: p.y });
+      players.set(p.id, { ...p, icon: p.icon || DEFAULT_ICON });
       usedColors.add(p.color);
+      profiles.set(p.id, { name: p.name, color: p.color, icon: p.icon || DEFAULT_ICON });
     }
   } else {
-    addPlayer(MY_ID, MY_NAME + " (host)", null);
+    addPlayer(MY_ID, profile.name, null, profile.icon, profile.color);
   }
   startHostLoop();
-  if (autoMode) {
-    show("play");
-  } else {
-    renderLobby();
-    show("lobby");
-  }
+  if (autoMode) { show("play"); } else { renderLobby(); show("lobby"); }
 });
 
-net.on("peer-join", (peerId) => renderLobby());
+net.on("peer-join", () => renderLobby());
+
 net.on("peer-leave", (peerId) => {
   const id = peerMap.get(peerId);
   if (id) {
     const p = players.get(id);
+    const name = p ? p.name : "Someone";
     if (p) usedColors.delete(p.color);
     players.delete(id);
     peerMap.delete(peerId);
+    pushSys(name + " left");
+    net.broadcast({ t: "sys", text: name + " left" });
   }
   renderLobby();
 });
 
 net.on("connected", () => {
-  net.send({ t: "hello", id: MY_ID, name: MY_NAME });
+  net.send({ t: "hello", id: MY_ID, name: profile.name, icon: profile.icon, preferredColor: profile.color });
   show("play");
 });
 
 net.on("host-closed", () => {
   if (!autoMode) { alert("The host left. Game over."); location.reload(); return; }
-  // Elect a new host. Each client waits (its position in hostOrder) * 700ms,
-  // then runs the auto election — first in line registers as host, the rest
-  // join them. The well-known id (bp2p-auto) stays the same so everyone finds
-  // the new host without any extra coordination.
   const myIndex = lastHostOrder.indexOf(MY_ID);
   const delay = Math.max(0, myIndex) * 700;
-  hostLoopRunning = false; // allow the new host loop to start if we're elected
+  hostLoopRunning = false;
   setTimeout(() => net.migrate(AUTO_CHANNEL), delay);
 });
 
@@ -133,50 +147,288 @@ net.on("error", (err) => {
 });
 
 net.on("message", ({ from, data }) => {
-  if (net.isHost) handleHostMessage(from, data);
-  else handleClientMessage(data);
+  if (net.isHost) handleHostMsg(from, data);
+  else handleClientMsg(data);
 });
 
-function handleHostMessage(peerId, msg) {
+// ---- host-side message handling ----
+function handleHostMsg(peerId, msg) {
   if (msg.t === "hello") {
-    const p = addPlayer(msg.id, msg.name, peerId);
+    const p = addPlayer(msg.id, msg.name, peerId, msg.icon, msg.preferredColor);
     net.sendTo(peerId, { t: "welcome", color: p.color });
+    pushSys(p.name + " joined");
+    net.broadcast({ t: "sys", text: p.name + " joined" });
     renderLobby();
+
   } else if (msg.t === "input") {
     const id = peerMap.get(peerId);
-    const p = id && players.get(id);
+    const p  = id && players.get(id);
     if (p) { p.x = clamp01(msg.x); p.y = clamp01(msg.y); }
+
+  } else if (msg.t === "profile") {
+    const id = peerMap.get(peerId);
+    const p  = id && players.get(id);
+    if (!p) return;
+    p.name = msg.name;
+    p.icon = msg.icon;
+    if (msg.preferredColor && !usedColors.has(msg.preferredColor)) {
+      usedColors.delete(p.color);
+      p.color = msg.preferredColor;
+      usedColors.add(p.color);
+    }
+    profiles.set(id, { name: p.name, color: p.color, icon: p.icon });
+    net.broadcast({ t: "profile", id, name: p.name, color: p.color, icon: p.icon });
+    renderChat();
+
+  } else if (msg.t === "chat") {
+    const id = peerMap.get(peerId);
+    if (!id) return;
+    const entry = { fromId: id, text: msg.text, ts: Date.now() };
+    chatLog.push(entry);
+    renderChat();
+    net.broadcast({ t: "chat", fromId: id, text: msg.text, ts: entry.ts });
   }
 }
 
-let myColor = "#fff";
-let lastState = [];
-let lastHostOrder = [];
-function handleClientMessage(msg) {
-  if (msg.t === "welcome") myColor = msg.color;
-  else if (msg.t === "state") {
+// ---- client-side message handling ----
+let myColor_assigned = false;
+function handleClientMsg(msg) {
+  if (msg.t === "welcome") {
+    myColor = msg.color;
+    profile.color = msg.color;
+    profiles.set(MY_ID, { ...profiles.get(MY_ID), color: myColor });
+    updateProfilePreview();
+
+  } else if (msg.t === "state") {
     lastState = msg.players;
     if (msg.hostOrder) lastHostOrder = msg.hostOrder;
+    for (const p of msg.players) {
+      profiles.set(p.id, { name: p.name, color: p.color, icon: p.icon || DEFAULT_ICON });
+    }
+
+  } else if (msg.t === "profile") {
+    profiles.set(msg.id, { name: msg.name, color: msg.color, icon: msg.icon });
+    if (msg.id === MY_ID) {
+      myColor = msg.color;
+      profile.color = msg.color;
+      localStorage.setItem("bp2p-color", msg.color);
+      updateProfilePreview();
+    }
+    renderChat();
+
+  } else if (msg.t === "chat") {
+    chatLog.push({ fromId: msg.fromId, text: msg.text, ts: msg.ts });
+    renderChat();
+    if (!chatOpen) showChatBadge();
+
+  } else if (msg.t === "sys") {
+    pushSys(msg.text);
   }
 }
 
 // ============================================================ HOST LOOP =====
 let hostLoopRunning = false;
+let lastState = [];
+let lastHostOrder = [];
+
 function startHostLoop() {
   if (hostLoopRunning) return;
   hostLoopRunning = true;
   setInterval(() => {
-    const list = [...players.values()].map((p) => ({
-      id: p.id, name: p.name, color: p.color, x: p.x, y: p.y,
+    const list = [...players.values()].map(p => ({
+      id: p.id, name: p.name, color: p.color, icon: p.icon, x: p.x, y: p.y,
     }));
-    // hostOrder: clientIds in join time order — clients use this to elect a
-    // new host if we disconnect.
     const hostOrder = [...players.keys()];
     net.broadcast({ t: "state", players: list, hostOrder });
     lastState = list;
     lastHostOrder = hostOrder;
   }, 1000 / TICK_HZ);
 }
+
+// ============================================================ CHAT =========
+const chatLog = [];   // { fromId, text, ts } | { sys, text }
+let chatOpen   = false;
+let unreadCount = 0;
+
+function pushSys(text) {
+  chatLog.push({ sys: true, text });
+  renderChat();
+  if (!chatOpen) showChatBadge();
+}
+
+function renderChat() {
+  const log = $("#chat-log");
+  const wasAtBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  log.innerHTML = "";
+  for (const entry of chatLog) {
+    if (entry.sys) {
+      const el = document.createElement("div");
+      el.className = "chat-msg sys";
+      el.textContent = entry.text;
+      log.appendChild(el);
+      continue;
+    }
+    const pf = profiles.get(entry.fromId) || { name: "?", color: "#888", icon: "👤" };
+    const isMe = entry.fromId === MY_ID;
+    const el = document.createElement("div");
+    el.className = "chat-msg" + (isMe ? " mine" : "");
+    el.innerHTML = `
+      <div class="msg-avatar" style="background:${pf.color}">${pf.icon}</div>
+      <div class="msg-body">
+        <div class="msg-name" style="color:${pf.color}">${esc(pf.name)}</div>
+        <div class="msg-bubble">${esc(entry.text)}</div>
+      </div>`;
+    log.appendChild(el);
+  }
+  if (wasAtBottom) log.scrollTop = log.scrollHeight;
+}
+
+function showChatBadge() {
+  unreadCount++;
+  const badge = $("#chat-badge");
+  badge.textContent = unreadCount > 9 ? "9+" : String(unreadCount);
+  badge.classList.remove("hidden");
+}
+
+function openChat() {
+  chatOpen = true;
+  unreadCount = 0;
+  $("#chat-badge").classList.add("hidden");
+  $("#panel-chat").classList.add("open");
+  renderChat();
+  setTimeout(() => {
+    const log = $("#chat-log");
+    log.scrollTop = log.scrollHeight;
+    $("#chat-input").focus();
+  }, 50);
+}
+
+function closeChat() {
+  chatOpen = false;
+  $("#panel-chat").classList.remove("open");
+}
+
+function sendChat() {
+  const input = $("#chat-input");
+  const text  = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  if (net.isHost) {
+    const entry = { fromId: MY_ID, text, ts: Date.now() };
+    chatLog.push(entry);
+    renderChat();
+    net.broadcast({ t: "chat", fromId: MY_ID, text, ts: entry.ts });
+  } else {
+    net.send({ t: "chat", text });
+  }
+}
+
+// ============================================================ PROFILE UI ====
+let profileOpen = false;
+
+function openProfileSheet() {
+  profileOpen = true;
+  // Populate fields from current profile.
+  $("#input-name").value = profile.name;
+  buildColorPicker();
+  buildIconPicker();
+  updateProfilePreview();
+  $("#sheet-profile").classList.add("open");
+}
+
+function closeProfileSheet() {
+  profileOpen = false;
+  $("#sheet-profile").classList.remove("open");
+}
+
+function buildColorPicker() {
+  const grid = $("#picker-color");
+  grid.innerHTML = "";
+  for (const c of COLORS) {
+    const btn = document.createElement("button");
+    btn.className = "swatch-opt" + (c === (myColor || profile.color) ? " selected" : "");
+    btn.style.background = c;
+    btn.setAttribute("aria-label", c);
+    btn.addEventListener("click", () => {
+      profile.color = c;
+      localStorage.setItem("bp2p-color", c);
+      updateProfilePreview();
+      grid.querySelectorAll(".swatch-opt").forEach(b => b.classList.remove("selected"));
+      btn.classList.add("selected");
+      broadcastProfile();
+    });
+    grid.appendChild(btn);
+  }
+}
+
+function buildIconPicker() {
+  const grid = $("#picker-icon");
+  grid.innerHTML = "";
+  for (const ic of ICONS) {
+    const btn = document.createElement("button");
+    btn.className = "icon-opt" + (ic === profile.icon ? " selected" : "");
+    btn.textContent = ic;
+    btn.addEventListener("click", () => {
+      profile.icon = ic;
+      localStorage.setItem("bp2p-icon", ic);
+      profiles.set(MY_ID, { ...profiles.get(MY_ID), icon: ic });
+      updateProfilePreview();
+      grid.querySelectorAll(".icon-opt").forEach(b => b.classList.remove("selected"));
+      btn.classList.add("selected");
+      broadcastProfile();
+      if (net.isHost) {
+        const me = players.get(MY_ID);
+        if (me) { me.icon = ic; profiles.set(MY_ID, { ...profiles.get(MY_ID), icon: ic }); }
+      }
+    });
+    grid.appendChild(btn);
+  }
+}
+
+function updateProfilePreview() {
+  const color = myColor || profile.color || COLORS[0];
+  $("#preview-dot").style.background = color;
+  $("#preview-dot").textContent = profile.icon;
+  $("#preview-name").textContent = profile.name;
+}
+
+function broadcastProfile() {
+  const msg = { t: "profile", name: profile.name, icon: profile.icon, preferredColor: profile.color };
+  if (net.isHost) {
+    const me = players.get(MY_ID);
+    if (me) {
+      me.name = profile.name;
+      me.icon = profile.icon;
+      // Host always gets their preferred color.
+      if (!usedColors.has(profile.color) || me.color === profile.color) {
+        usedColors.delete(me.color);
+        me.color = profile.color;
+        myColor  = profile.color;
+        usedColors.add(me.color);
+      }
+      profiles.set(MY_ID, { name: me.name, color: me.color, icon: me.icon });
+      net.broadcast({ t: "profile", id: MY_ID, name: me.name, color: me.color, icon: me.icon });
+    }
+    renderChat();
+  } else {
+    net.send(msg);
+  }
+}
+
+// Name input: debounce to avoid broadcasting every keystroke.
+let nameTimer = null;
+$("#input-name").addEventListener("input", (e) => {
+  profile.name = e.target.value.trim() || DEFAULT_NAME;
+  localStorage.setItem("bp2p-name", profile.name);
+  profiles.set(MY_ID, { ...profiles.get(MY_ID), name: profile.name });
+  updateProfilePreview();
+  clearTimeout(nameTimer);
+  nameTimer = setTimeout(broadcastProfile, 500);
+  if (net.isHost) {
+    const me = players.get(MY_ID);
+    if (me) { me.name = profile.name; profiles.set(MY_ID, { ...profiles.get(MY_ID), name: profile.name }); }
+  }
+});
 
 // ============================================================ LOBBY UI ======
 function renderLobby() {
@@ -185,12 +437,11 @@ function renderLobby() {
   const joinUrl = `${location.origin}${location.pathname}?join=${net.code}`;
   $("#join-url").textContent = joinUrl.replace(/^https?:\/\//, "");
   drawQR(joinUrl);
-
   const list = $("#player-list");
   list.innerHTML = "";
   for (const p of players.values()) {
     const li = document.createElement("li");
-    li.innerHTML = `<span class="swatch" style="background:${p.color}"></span>${p.name}`;
+    li.innerHTML = `<span class="swatch" style="background:${p.color}"></span>${esc(p.name)}`;
     list.appendChild(li);
   }
   $("#player-count").textContent = players.size;
@@ -208,24 +459,19 @@ function setStatus(text) {
   if (s) s.textContent = text;
 }
 
-// ============================================================ PLAY / CANVAS =
+// ============================================================ CANVAS ========
 const canvas = $("#stage");
-const ctx = canvas.getContext("2d");
-let myTarget = { x: 0.5, y: 0.5 };
+const ctx    = canvas.getContext("2d");
 let dragging = false;
 
-// Keep the canvas backing store matched to its on-screen size. Called every
-// frame so it self-corrects no matter when the play screen becomes visible
-// (host pressing Start, a client connecting) and on rotate/resize. Returns the
-// element's CSS-pixel size for use in drawing/input math.
 function syncCanvasSize() {
   const rect = canvas.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0) return rect; // not visible yet
+  if (rect.width === 0 || rect.height === 0) return rect;
   const dpr = window.devicePixelRatio || 1;
-  const w = Math.round(rect.width * dpr);
+  const w = Math.round(rect.width  * dpr);
   const h = Math.round(rect.height * dpr);
   if (canvas.width !== w || canvas.height !== h) {
-    canvas.width = w;
+    canvas.width  = w;
     canvas.height = h;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
@@ -234,61 +480,80 @@ function syncCanvasSize() {
 
 function pointerToNorm(e) {
   const rect = canvas.getBoundingClientRect();
-  const px = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
-  const py = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
-  return { x: clamp01(px / rect.width), y: clamp01(py / rect.height) };
+  const src  = e.touches ? e.touches[0] : e;
+  return {
+    x: clamp01((src.clientX - rect.left)  / rect.width),
+    y: clamp01((src.clientY - rect.top)   / rect.height),
+  };
 }
 
+function onDown(e) {
+  // Don't drag when a sheet or chat panel is open.
+  if (profileOpen || chatOpen) return;
+  dragging = true;
+  onMove(e);
+}
 function onMove(e) {
   if (!dragging) return;
   e.preventDefault();
-  myTarget = pointerToNorm(e);
-  // Push my input upstream (or apply directly if I'm the host).
+  const { x, y } = pointerToNorm(e);
   if (net.isHost) {
     const me = players.get(MY_ID);
-    if (me) { me.x = myTarget.x; me.y = myTarget.y; }
+    if (me) { me.x = x; me.y = y; }
   } else {
-    net.send({ t: "input", x: myTarget.x, y: myTarget.y });
+    net.send({ t: "input", x, y });
   }
 }
-function onDown(e) { dragging = true; onMove(e); }
 function onUp() { dragging = false; }
 
-canvas.addEventListener("mousedown", onDown);
-canvas.addEventListener("mousemove", onMove);
-window.addEventListener("mouseup", onUp);
+canvas.addEventListener("mousedown",  onDown);
+canvas.addEventListener("mousemove",  onMove);
+window.addEventListener("mouseup",    onUp);
 canvas.addEventListener("touchstart", onDown, { passive: false });
-canvas.addEventListener("touchmove", onMove, { passive: false });
-window.addEventListener("touchend", onUp);
+canvas.addEventListener("touchmove",  onMove, { passive: false });
+window.addEventListener("touchend",   onUp);
 
 function render() {
   const rect = syncCanvasSize();
   ctx.clearRect(0, 0, rect.width, rect.height);
+
   for (const p of lastState) {
     const x = p.x * rect.width;
     const y = p.y * rect.height;
+    const isMe = p.id === MY_ID;
+
+    // Dot
     ctx.beginPath();
-    ctx.arc(x, y, 22, 0, Math.PI * 2);
+    ctx.arc(x, y, 24, 0, Math.PI * 2);
     ctx.fillStyle = p.color;
     ctx.fill();
-    if (p.id === MY_ID) {
-      ctx.lineWidth = 3;
+    if (isMe) {
+      ctx.lineWidth   = 3;
       ctx.strokeStyle = "#fff";
       ctx.stroke();
     }
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(p.name, x, y - 30);
+
+    // Icon emoji inside dot
+    ctx.font          = "20px serif";
+    ctx.textAlign     = "center";
+    ctx.textBaseline  = "middle";
+    ctx.fillText(p.icon || "●", x, y);
+
+    // Name above dot
+    ctx.font          = "bold 11px system-ui, sans-serif";
+    ctx.textBaseline  = "alphabetic";
+    ctx.fillStyle     = "rgba(255,255,255,0.85)";
+    ctx.fillText(p.name, x, y - 32);
   }
+
   requestAnimationFrame(render);
 }
 
 // ============================================================ MENU ACTIONS ==
 $("#btn-auto").addEventListener("click", () => {
   autoMode = true;
-  document.querySelector("#btn-auto").disabled = true;
-  document.querySelector("#auto-status").textContent = "Looking for a game on your Wi-Fi…";
+  $("#btn-auto").disabled = true;
+  $("#auto-status").textContent = "Looking for a game on your Wi-Fi…";
   net.auto(AUTO_CHANNEL);
 });
 
@@ -304,19 +569,33 @@ $("#btn-join").addEventListener("click", () => {
   net.join(code);
 });
 
-$("#btn-start").addEventListener("click", () => {
-  show("play"); // render loop sizes the canvas once it's visible
-});
+$("#btn-start").addEventListener("click", () => show("play"));
 
-// Auto-join if opened from a QR link (?join=CODE).
-const params = new URLSearchParams(location.search);
-const joinParam = params.get("join");
-if (joinParam) {
-  $("#code-input").value = joinParam.toUpperCase();
-}
+// Auto-join from QR link (?join=CODE).
+const joinParam = new URLSearchParams(location.search).get("join");
+if (joinParam) $("#code-input").value = joinParam.toUpperCase();
+
+// ============================================================ PROFILE ACTIONS
+$("#btn-profile").addEventListener("click", openProfileSheet);
+$("#btn-close-profile").addEventListener("click", closeProfileSheet);
+
+// ============================================================ CHAT ACTIONS ==
+$("#btn-chat").addEventListener("click", openChat);
+$("#btn-close-chat").addEventListener("click", closeChat);
+$("#btn-send").addEventListener("click", sendChat);
+$("#chat-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); sendChat(); }
+});
 
 // ---- helpers ----
 function clamp01(v) { return Math.max(0, Math.min(1, v)); }
+function esc(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
 
-// Kick off the render loop once; it harmlessly draws nothing until we're playing.
+// Kick off the render loop; draws nothing until we're playing.
 render();

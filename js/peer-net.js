@@ -111,9 +111,11 @@ class PeerNet {
     this._tryJoinThenHost();
   }
 
-  _tryJoinThenHost() {
+  _tryJoinThenHost(attempt = 0) {
+    if (attempt > 10) { this._emit("error", { type: "election-failed" }); return; }
+
     this.isHost = false;
-    const peer = new Peer({ debug: 1 }); // random id for the join attempt
+    const peer = new Peer({ debug: 1 });
     this.peer = peer;
     let settled = false;
 
@@ -121,13 +123,13 @@ class PeerNet {
       const conn = peer.connect(this._autoId, { reliable: true });
       this.hostConn = conn;
 
-      // Safety net: if the host neither answers nor reports unavailable, assume
-      // there isn't one and take the host role ourselves.
+      // Safety net: host registered but not responding (e.g. stale broker slot
+      // from a recently-closed tab). Give it 2.5s then try to claim the host role.
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
         peer.destroy();
-        this._becomeHost();
+        this._becomeHost(attempt);
       }, 2500);
 
       conn.on("open", () => {
@@ -136,23 +138,23 @@ class PeerNet {
         clearTimeout(timer);
         this._emit("connected");
       });
-      conn.on("data", (data) => this._emit("message", { from: "host", data }));
-      conn.on("close", () => this._emit("host-closed"));
+      conn.on("data",  (data) => this._emit("message", { from: "host", data }));
+      conn.on("close", ()     => this._emit("host-closed"));
     });
 
     peer.on("error", (err) => {
-      // No host registered under the well-known id yet — become it.
+      // No host registered yet — become it.
       if (err.type === "peer-unavailable" && !settled) {
         settled = true;
         peer.destroy();
-        this._becomeHost();
+        this._becomeHost(attempt);
       } else if (!settled) {
         this._emit("error", err);
       }
     });
   }
 
-  _becomeHost() {
+  _becomeHost(attempt = 0) {
     this.isHost = true;
     const peer = new Peer(this._autoId, { debug: 1 });
     this.peer = peer;
@@ -161,11 +163,13 @@ class PeerNet {
     this._acceptConnections(peer);
 
     peer.on("error", (err) => {
-      // Race: another device claimed the host id a moment before us. Step back
-      // and join them instead.
       if (err.type === "unavailable-id") {
+        // Another device registered the host id just before us (race), or a
+        // stale broker slot from a previous session hasn't expired yet.
+        // Back off with exponential delay and try joining again.
         peer.destroy();
-        this._tryJoinThenHost();
+        const backoff = Math.min(300 * Math.pow(2, attempt), 6000);
+        setTimeout(() => this._tryJoinThenHost(attempt + 1), backoff);
       } else {
         this._emit("error", err);
       }
