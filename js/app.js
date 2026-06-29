@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.1.0";
+const APP_VERSION = "2.1.1";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -459,7 +459,7 @@ function handleHostMsg(peerId, msg) {
     if (id) handleGameInput(id, msg.game, msg.input);
 
   } else if (msg.t === "game-mode") {
-    setGameMode(msg.game, true, undefined, true);
+    setGameMode(msg.game, true, undefined, true).catch(console.error);
 
   } else if (msg.t === "profile") {
     const id = peerMap.get(peerId);
@@ -565,7 +565,7 @@ function handleClientMsg(msg) {
     replaceDrawing(msg.strokes);
 
   } else if (msg.t === "game-mode") {
-    setGameMode(msg.game, false);
+    setGameMode(msg.game, false).catch(console.error);
 
   } else if (msg.t === "game-state") {
     handleGameState(msg.game, msg.state);
@@ -906,9 +906,9 @@ function gameName(game) {
   return window.BP2PGames?.[game]?.name || game;
 }
 
-function setGameMode(game, broadcast = true, restoredState = undefined, promptHost = true) {
+async function setGameMode(game, broadcast = true, restoredState = undefined, promptHost = true) {
   const nextGame = game || "free-play";
-  if (selectedGame === nextGame) return;
+  if (selectedGame === nextGame && (nextGame === "free-play" || activeGame)) return;
   stopActiveGame();
   selectedGame = nextGame;
   const select = $("#game-select");
@@ -918,7 +918,7 @@ function setGameMode(game, broadcast = true, restoredState = undefined, promptHo
   const initialState = restoredState !== undefined
     ? restoredState
     : (promptHost && net.isHost ? promptForSavedGame(selectedGame) : null);
-  startActiveGame(initialState);
+  await startActiveGame(initialState);
   if (broadcast) {
     if (net.isHost) net.broadcast({ t: "game-mode", game: selectedGame });
     else net.send({ t: "game-mode", game: selectedGame });
@@ -947,10 +947,51 @@ function gameHostApi() {
   };
 }
 
-function startActiveGame(initialState = null) {
+const GAME_SCRIPTS = {
+  digger: "js/games/digger.js",
+};
+
+const loadingGameScripts = new Map();
+
+function loadGameScript(game) {
+  if (window.BP2PGames?.[game]) return Promise.resolve(true);
+  const src = GAME_SCRIPTS[game];
+  if (!src) return Promise.resolve(false);
+  if (loadingGameScripts.has(game)) return loadingGameScripts.get(game);
+  const promise = new Promise((resolve) => {
+    const script = document.createElement("script");
+    script.src = `${src}?v=${encodeURIComponent(APP_VERSION)}`;
+    script.onload = () => resolve(!!window.BP2PGames?.[game]);
+    script.onerror = () => resolve(false);
+    document.head.appendChild(script);
+  });
+  loadingGameScripts.set(game, promise);
+  return promise;
+}
+
+function drawGameMessage(text) {
+  const rect = syncCanvasSize();
+  ctx.clearRect(0, 0, rect.width, rect.height);
+  ctx.fillStyle = "#12121f";
+  ctx.fillRect(0, 0, rect.width, rect.height);
+  ctx.fillStyle = "#eef0ff";
+  ctx.font = "700 18px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, rect.width / 2, rect.height / 2);
+}
+
+async function startActiveGame(initialState = null) {
   if (selectedGame === "free-play") return;
-  const game = window.BP2PGames?.[selectedGame];
-  if (!game?.create) return;
+  drawGameMessage(`Loading ${gameName(selectedGame)}…`);
+  const gameId = selectedGame;
+  const loaded = await loadGameScript(gameId);
+  if (selectedGame !== gameId) return;
+  const game = window.BP2PGames?.[gameId];
+  if (!loaded || !game?.create) {
+    drawGameMessage(`${gameName(gameId)} could not load.`);
+    return;
+  }
   activeGame = game.create(gameHostApi(), initialState);
   activeGame.start?.();
   if (initialState) activeGame.onState?.(initialState);
@@ -1889,7 +1930,7 @@ $("#btn-join").addEventListener("click", () => {
 });
 
 $("#btn-start").addEventListener("click", () => show("play"));
-$("#game-select")?.addEventListener("change", (e) => setGameMode(e.target.value));
+$("#game-select")?.addEventListener("change", (e) => setGameMode(e.target.value).catch(console.error));
 $("#btn-draw")?.addEventListener("click", () => setDrawMode(!drawMode));
 $("#btn-draw-pen")?.addEventListener("click", () => setDrawTool("pen"));
 $("#btn-draw-highlighter")?.addEventListener("click", () => setDrawTool("highlighter"));
@@ -1900,7 +1941,7 @@ $("#draw-size")?.addEventListener("input", (e) => setDrawSize(e.target.value));
 $("#btn-draw-undo")?.addEventListener("click", undoDrawing);
 $("#btn-draw-redo")?.addEventListener("click", redoDrawing);
 $("#btn-draw-clear")?.addEventListener("click", clearDrawingWithConfirmation);
-setGameMode($("#game-select")?.value || "free-play");
+setGameMode($("#game-select")?.value || "free-play").catch(console.error);
 syncDrawToolUi();
 
 // Auto-join from QR link (?join=CODE).
