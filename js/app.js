@@ -41,7 +41,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.0.3";
+const APP_VERSION = "2.0.4";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -184,6 +184,8 @@ async function toggleKeepAwake() {
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") requestWakeLock();
+  if (document.visibilityState === "hidden") yieldHostForBackground();
+  if (document.visibilityState === "visible") rejoinAfterYield();
 });
 
 // ============================================================ NOTIFICATIONS =
@@ -294,6 +296,7 @@ let autoMode = true;
 let hasLeftLobby = false;
 let migratingFromHostId = null;
 let keepPlayingAfterMigration = false;
+let yieldedHostForBackground = false;
 
 // ============================================================ DOM ===========
 const $ = (sel) => document.querySelector(sel);
@@ -335,6 +338,7 @@ function addPlayer(id, name, peerId, icon, preferredColor) {
 // ============================================================ NET WIRING ====
 function wireNetEvents() {
   net.on("ready", () => {
+    yieldedHostForBackground = false;
     players.clear();
     peerMap.clear();
     usedColors.clear();
@@ -351,6 +355,7 @@ function wireNetEvents() {
     }
     migratingFromHostId = null;
     startHostLoop();
+    announceCameraOn();
     renderLobby();
     show(keepPlayingAfterMigration ? "play" : "lobby");
     keepPlayingAfterMigration = false;
@@ -376,7 +381,9 @@ function wireNetEvents() {
   });
 
   net.on("connected", () => {
+    yieldedHostForBackground = false;
     net.send({ t: "hello", id: MY_ID, name: profile.name, icon: profile.icon, preferredColor: profile.color });
+    announceCameraOn();
     show(keepPlayingAfterMigration ? "play" : "lobby");
     keepPlayingAfterMigration = false;
   });
@@ -598,10 +605,32 @@ function stopHostLoop() {
   hostLoopTimer = null;
 }
 
+function yieldHostForBackground() {
+  if (!net.isHost || hasLeftLobby || !autoMode || yieldedHostForBackground) return;
+  if (net.peerCount() === 0) return;
+  yieldedHostForBackground = true;
+  keepPlayingAfterMigration = screens.play.classList.contains("active");
+  stopHostLoop();
+  net.destroy();
+  show(keepPlayingAfterMigration ? "play" : "lobby");
+}
+
+function rejoinAfterYield() {
+  if (!yieldedHostForBackground || hasLeftLobby) return;
+  net = new PeerNet();
+  wireNetEvents();
+  hasLeftLobby = false;
+  autoMode = true;
+  renderLobby();
+  if (!keepPlayingAfterMigration) show("lobby");
+  net.auto(AUTO_CHANNEL);
+}
+
 function joinCode(code) {
   autoMode = false;
   hasLeftLobby = false;
   keepPlayingAfterMigration = false;
+  yieldedHostForBackground = false;
   setStatus("Connecting…");
   renderLobby();
   show("lobby");
@@ -1305,6 +1334,7 @@ function leaveLobby() {
   hasLeftLobby = true;
   autoMode = false;
   keepPlayingAfterMigration = false;
+  yieldedHostForBackground = false;
   stopHostLoop();
   stopLiveVoice();
   stopCamera();
@@ -1616,6 +1646,7 @@ $("#btn-host").addEventListener("click", () => {
   autoMode = false;
   hasLeftLobby = false;
   keepPlayingAfterMigration = false;
+  yieldedHostForBackground = false;
   players.clear();
   peerMap.clear();
   liveVideoPeers.clear();
