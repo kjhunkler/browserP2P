@@ -41,7 +41,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "1.7.2";
+const APP_VERSION = "1.9.0";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -546,7 +546,10 @@ let unreadCount = 0;
 // ============================================================ DRAWING =======
 const DRAWING_KEY = "bp2p-drawing";
 const DRAWING_LIMIT = 800;
-const DRAW_COLOR = "#fff";
+const DRAW_COLOR_KEY = "bp2p-draw-color";
+const DRAW_DEFAULT_COLOR = "#ffffff";
+const DRAW_PEN_WIDTH = 2.2;
+const DRAW_ERASER_WIDTH = 18;
 
 function loadDrawing() {
   try { return JSON.parse(localStorage.getItem(DRAWING_KEY) || "[]"); } catch { return []; }
@@ -557,6 +560,8 @@ function saveDrawing() {
 
 const drawingStrokes = loadDrawing();
 let drawMode = false;
+let drawTool = "pen";
+let drawColor = localStorage.getItem(DRAW_COLOR_KEY) || DRAW_DEFAULT_COLOR;
 let drawing = false;
 let currentStroke = null;
 
@@ -585,7 +590,8 @@ function drawStroke(stroke, rect) {
   const points = stroke.points || [];
   if (points.length < 2) return;
   ctx.save();
-  ctx.strokeStyle = stroke.color || DRAW_COLOR;
+  if (stroke.tool === "eraser") ctx.globalCompositeOperation = "destination-out";
+  ctx.strokeStyle = stroke.tool === "eraser" ? "#000" : (stroke.color || DRAW_DEFAULT_COLOR);
   ctx.lineWidth = stroke.width || 4;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
@@ -610,6 +616,27 @@ function renderDrawing(rect) {
 function setDrawMode(enabled) {
   drawMode = enabled;
   $("#btn-draw")?.classList.toggle("active", drawMode);
+  $("#draw-toolbar")?.classList.toggle("hidden", !drawMode);
+  syncDrawToolUi();
+}
+
+function setDrawTool(tool) {
+  drawTool = tool;
+  setDrawMode(true);
+  syncDrawToolUi();
+}
+
+function setDrawColor(color) {
+  drawColor = color || DRAW_DEFAULT_COLOR;
+  localStorage.setItem(DRAW_COLOR_KEY, drawColor);
+  setDrawTool("pen");
+}
+
+function syncDrawToolUi() {
+  $("#btn-draw-pen")?.classList.toggle("active", drawTool === "pen");
+  $("#btn-draw-eraser")?.classList.toggle("active", drawTool === "eraser");
+  const input = $("#draw-color");
+  if (input && input.value !== drawColor) input.value = drawColor;
 }
 
 function pushSys(text) {
@@ -873,8 +900,10 @@ let liveStream    = null;
 let liveCapCtx    = null;
 let liveProcessor = null;
 
-const LIVE_SR    = 16000; // sample rate — adequate for voice
-const LIVE_CHUNK = 512;   // samples per callback (~32 ms)
+const LIVE_SR         = 16000; // sample rate — adequate for voice
+const LIVE_CHUNK      = 256;   // samples per callback (~16 ms)
+const LIVE_MIN_BUFFER = 0.03;  // target playout cushion
+const LIVE_MAX_QUEUE  = 0.28;  // reset if queued audio drifts too far ahead
 
 function handleLiveAudio(msg) {
   const { fromId, t } = msg;
@@ -886,7 +915,7 @@ function handleLiveAudio(msg) {
     markSilent(fromId);
   } else if (t === "audio-pcm") {
     markSpeaking(fromId);
-    playLivePcm(fromId, msg.b64);
+    playLivePcm(fromId, msg.pcm || msg.b64);
   }
 }
 
@@ -908,15 +937,22 @@ function markSilent(fromId) {
   speakerBufs.delete(fromId);
 }
 
-function playLivePcm(fromId, b64) {
-  if (!playAudioCtx) playAudioCtx = new AudioContext({ sampleRate: LIVE_SR });
+function playLivePcm(fromId, payload) {
+  if (!playAudioCtx) playAudioCtx = new AudioContext({ sampleRate: LIVE_SR, latencyHint: "interactive" });
   if (playAudioCtx.state === "suspended") playAudioCtx.resume();
 
-  // base64 → bytes → Int16 → Float32
-  const binary = atob(b64);
-  const bytes  = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  const int16   = new Int16Array(bytes.buffer);
+  // ArrayBuffer → Int16 → Float32. Base64 is kept for compatibility with older clients.
+  let buffer;
+  if (typeof payload === "string") {
+    const binary = atob(payload);
+    const bytes  = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    buffer = bytes.buffer;
+  } else {
+    buffer = payload instanceof ArrayBuffer ? payload : payload?.buffer;
+  }
+  if (!buffer) return;
+  const int16   = new Int16Array(buffer);
   const float32 = new Float32Array(int16.length);
   for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
 
@@ -930,7 +966,8 @@ function playLivePcm(fromId, b64) {
   if (!speakerBufs.has(fromId)) speakerBufs.set(fromId, { nextTime: 0 });
   const spk    = speakerBufs.get(fromId);
   const now    = playAudioCtx.currentTime;
-  const playAt = Math.max(now + 0.05, spk.nextTime); // 50 ms minimum buffer
+  if (spk.nextTime < now || spk.nextTime > now + LIVE_MAX_QUEUE) spk.nextTime = now + LIVE_MIN_BUFFER;
+  const playAt = Math.max(now + LIVE_MIN_BUFFER, spk.nextTime);
   node.start(playAt);
   spk.nextTime = playAt + buf.duration;
 }
@@ -943,8 +980,15 @@ function sendLiveMsg(msg) {
 async function startLiveVoice() {
   if (liveStream) return;
   try {
-    liveStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    liveCapCtx = new AudioContext({ sampleRate: LIVE_SR });
+    liveStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+      video: false,
+    });
+    liveCapCtx = new AudioContext({ sampleRate: LIVE_SR, latencyHint: "interactive" });
     const src  = liveCapCtx.createMediaStreamSource(liveStream);
 
     liveProcessor = liveCapCtx.createScriptProcessor(LIVE_CHUNK, 1, 1);
@@ -954,10 +998,7 @@ async function startLiveVoice() {
       for (let i = 0; i < pcm.length; i++) {
         int16[i] = Math.max(-32768, Math.min(32767, Math.round(pcm[i] * 32767)));
       }
-      const bytes  = new Uint8Array(int16.buffer);
-      let   binary = "";
-      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-      sendLiveMsg({ t: "audio-pcm", fromId: MY_ID, b64: btoa(binary) });
+      sendLiveMsg({ t: "audio-pcm", fromId: MY_ID, pcm: int16.buffer });
     };
 
     // Mute local output (ScriptProcessor must connect to destination to fire,
@@ -1209,7 +1250,7 @@ function pointerToNorm(e) {
 
 function pointerPressure(e) {
   const src = e.touches ? e.touches[0] : e;
-  return src.force || src.pressure || 0.5;
+  return clamp01(src.force || src.pressure || 0.5);
 }
 
 function onDown(e) {
@@ -1219,10 +1260,12 @@ function onDown(e) {
     e.preventDefault();
     drawing = true;
     const point = pointerToNorm(e);
+    const pressure = pointerPressure(e);
     currentStroke = {
       id: MY_ID + "-" + Date.now(),
-      color: DRAW_COLOR,
-      width: 2 + pointerPressure(e) * 6,
+      tool: drawTool,
+      color: drawTool === "eraser" ? null : drawColor,
+      width: drawTool === "eraser" ? DRAW_ERASER_WIDTH : DRAW_PEN_WIDTH + pressure * 1.4,
       points: [point],
     };
     return;
@@ -1349,6 +1392,10 @@ $("#btn-join").addEventListener("click", () => {
 
 $("#btn-start").addEventListener("click", () => show("play"));
 $("#btn-draw")?.addEventListener("click", () => setDrawMode(!drawMode));
+$("#btn-draw-pen")?.addEventListener("click", () => setDrawTool("pen"));
+$("#btn-draw-eraser")?.addEventListener("click", () => setDrawTool("eraser"));
+$("#draw-color")?.addEventListener("input", (e) => setDrawColor(e.target.value));
+syncDrawToolUi();
 
 // Auto-join from QR link (?join=CODE).
 const joinParam = new URLSearchParams(location.search).get("join");

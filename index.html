@@ -53,6 +53,11 @@
       <canvas id="stage"></canvas>
       <button id="btn-profile" class="hud-btn hud-top-left" aria-label="Settings">⚙️</button>
       <button id="btn-draw" class="hud-btn hud-bottom-left" aria-label="Draw mode" type="button">✏️</button>
+      <div id="draw-toolbar" class="draw-toolbar hidden" aria-label="Drawing tools">
+        <button id="btn-draw-pen" class="draw-tool-btn active" type="button" aria-label="Pen">✏️</button>
+        <button id="btn-draw-eraser" class="draw-tool-btn" type="button" aria-label="Eraser">🧽</button>
+        <input id="draw-color" class="draw-color-input" type="color" value="#ffffff" aria-label="Drawing color" />
+      </div>
       <button id="btn-mic"  class="hud-btn hud-bottom-right-2" aria-label="Record voice" type="button">🎤</button>
       <button id="btn-chat" class="hud-btn hud-bottom-right"  aria-label="Chat">
         💬<span id="chat-badge" class="badge hidden">0</span>
@@ -63,51 +68,52 @@
 
   <!-- ===== Settings sheet (slides in from right) ===== -->
   <div id="sheet-profile" class="sheet" aria-hidden="true">
-    <div class="sheet-header">
-      <h2>Settings</h2>
-      <button id="btn-close-profile" class="close-btn" aria-label="Close">✕</button>
-    </div>
-    <div class="field-group app-update-group">
-      <label>App</label>
-      <div class="version-row">
-        <span>Version <strong id="app-version">1.7.2</strong></span>
-        <button id="btn-check-update" class="btn btn-small" type="button">Check for updates</button>
-        <button id="btn-leave-lobby" class="btn btn-small btn-danger" type="button">Leave lobby</button>
+      <div class="sheet-header">
+          <h2>Settings</h2>
+          <button id="btn-close-profile" class="close-btn" aria-label="Close">✕</button>
       </div>
-      <p id="update-status" class="status"></p>
-    </div>
-    <div class="field-group app-update-group">
-      <label>Display</label>
-      <div class="version-row">
-        <span>Keep screen awake</span>
-        <button id="btn-keep-awake" class="btn btn-small" type="button">Off</button>
+      <div class="profile-preview-row">
+          <div id="preview-dot" class="preview-dot"></div>
+          <span id="preview-name" class="preview-name"></span>
       </div>
-      <p id="wake-status" class="status"></p>
-    </div>
-    <div class="field-group app-update-group">
-      <label>Notifications</label>
-      <div class="version-row">
-        <span>Notify when someone joins</span>
-        <button id="btn-enable-notifications" class="btn btn-small" type="button">Enable</button>
+      <div class="field-group">
+          <label for="input-name">Name</label>
+          <input id="input-name" type="text" class="text-input" maxlength="20" autocomplete="off" />
       </div>
-      <p id="notification-status" class="status"></p>
-    </div>
-    <div class="profile-preview-row">
-      <div id="preview-dot" class="preview-dot"></div>
-      <span id="preview-name" class="preview-name"></span>
-    </div>
-    <div class="field-group">
-      <label for="input-name">Name</label>
-      <input id="input-name" type="text" class="text-input" maxlength="20" autocomplete="off" />
-    </div>
-    <div class="field-group">
-      <label>Color</label>
-      <div id="picker-color" class="swatch-grid"></div>
-    </div>
-    <div class="field-group">
-      <label>Icon</label>
-      <div id="picker-icon" class="icon-grid"></div>
-    </div>
+      <div class="field-group">
+          <label>Color</label>
+          <div id="picker-color" class="swatch-grid"></div>
+      </div>
+      <div class="field-group">
+          <label>Icon</label>
+          <div id="picker-icon" class="icon-grid"></div>
+      </div>
+
+      <div class="field-group app-update-group">
+          <label>Display</label>
+          <div class="version-row">
+              <span>Keep screen awake</span>
+              <button id="btn-keep-awake" class="btn btn-small" type="button">Off</button>
+          </div>
+          <p id="wake-status" class="status"></p>
+      </div>
+      <div class="field-group app-update-group">
+          <label>Notifications</label>
+          <div class="version-row">
+              <span>Notify when someone joins</span>
+              <button id="btn-enable-notifications" class="btn btn-small" type="button">Enable</button>
+          </div>
+          <p id="notification-status" class="status"></p>
+      </div>
+      <div class="field-group app-update-group">
+          <label>App</label>
+          <div class="version-row">
+        <span>Version <strong id="app-version">1.9.0</strong></span>
+              <button id="btn-check-update" class="btn btn-small" type="button">Check for updates</button>
+              <button id="btn-leave-lobby" class="btn btn-small btn-danger" type="button">Leave lobby</button>
+          </div>
+          <p id="update-status" class="status"></p>
+      </div>
   </div>
 
   <!-- ===== Chat panel (slides up from bottom) ===== -->
