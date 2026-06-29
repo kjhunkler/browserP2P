@@ -143,6 +143,7 @@ net.on("peer-leave", (peerId) => {
     if (p) usedColors.delete(p.color);
     players.delete(id);
     peerMap.delete(peerId);
+    markSilent(id);
     pushSys(name + " left");
     net.broadcast({ t: "sys", text: name + " left" });
   }
@@ -217,6 +218,13 @@ function handleHostMsg(peerId, msg) {
     msg.fromId = id; // use server-verified id
     receiveVoiceMessage(msg);
     net.broadcast({ t: "voice", fromId: id, msgId: msg.msgId, mimeType: msg.mimeType, audioB64: msg.audioB64, duration: msg.duration, ts: msg.ts });
+
+  } else if (msg.t === "audio-start" || msg.t === "audio-stop" || msg.t === "audio-pcm") {
+    const id = peerMap.get(peerId);
+    if (!id) return;
+    msg.fromId = id;
+    handleLiveAudio(msg);
+    net.broadcast(msg);
   }
 }
 
@@ -260,6 +268,9 @@ function handleClientMsg(msg) {
 
   } else if (msg.t === "voice") {
     receiveVoiceMessage(msg);
+
+  } else if (msg.t === "audio-start" || msg.t === "audio-stop" || msg.t === "audio-pcm") {
+    handleLiveAudio(msg);
 
   } else if (msg.t === "sys") {
     pushSys(msg.text);
@@ -471,7 +482,6 @@ function stopRecording() {
 
 function setPttRecording() {
   $("#btn-ptt").classList.add("recording");
-  $("#btn-mic").classList.add("recording");
   const label = $("#ptt-label");
   recTickInterval = setInterval(() => {
     if (label) label.textContent = "Recording " + fmtDur((Date.now() - recStart) / 1000);
@@ -481,7 +491,6 @@ function setPttRecording() {
 function setPttIdle() {
   clearInterval(recTickInterval);
   $("#btn-ptt").classList.remove("recording");
-  $("#btn-mic").classList.remove("recording");
   const label = $("#ptt-label");
   if (label) label.textContent = "Hold to talk";
 }
@@ -546,7 +555,149 @@ function attachPtt(btn) {
   btn.addEventListener("touchcancel", stopRecording);
 }
 attachPtt($("#btn-ptt"));
-attachPtt($("#btn-mic"));
+// #btn-mic is wired separately in the LIVE VOICE section below.
+
+// ============================================================ LIVE VOICE ====
+// Real-time walkie-talkie: raw 16kHz PCM streamed as Int16 base64 over the
+// existing DataChannel. No storage, no thread association. Multiple speakers
+// can be active simultaneously; each has an independent jitter-buffered queue.
+
+const speaking        = new Set();          // ids currently transmitting
+const speakerTimeouts = new Map();          // id -> auto-clear timeout
+const speakerBufs     = new Map();          // id -> { nextTime } for scheduling
+let   playAudioCtx    = null;               // shared playback context
+
+// Capture state (one instance per PTT press)
+let liveStream    = null;
+let liveCapCtx    = null;
+let liveProcessor = null;
+
+const LIVE_SR    = 16000; // sample rate — adequate for voice
+const LIVE_CHUNK = 512;   // samples per callback (~32 ms)
+
+function handleLiveAudio(msg) {
+  const { fromId, t } = msg;
+  if (fromId === MY_ID) return; // ignore own echoes from host relay
+
+  if (t === "audio-start") {
+    markSpeaking(fromId);
+  } else if (t === "audio-stop") {
+    markSilent(fromId);
+  } else if (t === "audio-pcm") {
+    markSpeaking(fromId);
+    playLivePcm(fromId, msg.b64);
+  }
+}
+
+function markSpeaking(fromId) {
+  speaking.add(fromId);
+  clearTimeout(speakerTimeouts.get(fromId));
+  // Auto-remove after 3 s if the sender crashes without sending audio-stop.
+  speakerTimeouts.set(fromId, setTimeout(() => {
+    speaking.delete(fromId);
+    speakerTimeouts.delete(fromId);
+    speakerBufs.delete(fromId);
+  }, 3000));
+}
+
+function markSilent(fromId) {
+  speaking.delete(fromId);
+  clearTimeout(speakerTimeouts.get(fromId));
+  speakerTimeouts.delete(fromId);
+  speakerBufs.delete(fromId);
+}
+
+function playLivePcm(fromId, b64) {
+  if (!playAudioCtx) playAudioCtx = new AudioContext({ sampleRate: LIVE_SR });
+  if (playAudioCtx.state === "suspended") playAudioCtx.resume();
+
+  // base64 → bytes → Int16 → Float32
+  const binary = atob(b64);
+  const bytes  = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const int16   = new Int16Array(bytes.buffer);
+  const float32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+
+  const buf = playAudioCtx.createBuffer(1, float32.length, LIVE_SR);
+  buf.copyToChannel(float32, 0);
+  const node = playAudioCtx.createBufferSource();
+  node.buffer = buf;
+  node.connect(playAudioCtx.destination);
+
+  // Per-sender jitter buffer — each chunk schedules right after the last.
+  if (!speakerBufs.has(fromId)) speakerBufs.set(fromId, { nextTime: 0 });
+  const spk    = speakerBufs.get(fromId);
+  const now    = playAudioCtx.currentTime;
+  const playAt = Math.max(now + 0.05, spk.nextTime); // 50 ms minimum buffer
+  node.start(playAt);
+  spk.nextTime = playAt + buf.duration;
+}
+
+function sendLiveMsg(msg) {
+  if (net.isHost) net.broadcast(msg);
+  else net.send(msg);
+}
+
+async function startLiveVoice() {
+  if (liveStream) return;
+  try {
+    liveStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    liveCapCtx = new AudioContext({ sampleRate: LIVE_SR });
+    const src  = liveCapCtx.createMediaStreamSource(liveStream);
+
+    liveProcessor = liveCapCtx.createScriptProcessor(LIVE_CHUNK, 1, 1);
+    liveProcessor.onaudioprocess = (e) => {
+      const pcm   = e.inputBuffer.getChannelData(0);
+      const int16 = new Int16Array(pcm.length);
+      for (let i = 0; i < pcm.length; i++) {
+        int16[i] = Math.max(-32768, Math.min(32767, Math.round(pcm[i] * 32767)));
+      }
+      const bytes  = new Uint8Array(int16.buffer);
+      let   binary = "";
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      sendLiveMsg({ t: "audio-pcm", fromId: MY_ID, b64: btoa(binary) });
+    };
+
+    // Mute local output (ScriptProcessor must connect to destination to fire,
+    // but we don't want to hear ourselves).
+    const mute = liveCapCtx.createGain();
+    mute.gain.value = 0;
+    src.connect(liveProcessor);
+    liveProcessor.connect(mute);
+    mute.connect(liveCapCtx.destination);
+
+    speaking.add(MY_ID);
+    sendLiveMsg({ t: "audio-start", fromId: MY_ID });
+    $("#btn-mic").classList.add("recording");
+  } catch {
+    liveStream = null;
+    $("#btn-mic").classList.remove("recording");
+  }
+}
+
+function stopLiveVoice() {
+  if (!liveStream) return;
+  liveProcessor?.disconnect();
+  liveProcessor = null;
+  liveCapCtx?.close().catch(() => {});
+  liveCapCtx = null;
+  liveStream.getTracks().forEach((t) => t.stop());
+  liveStream = null;
+
+  speaking.delete(MY_ID);
+  sendLiveMsg({ t: "audio-stop", fromId: MY_ID });
+  $("#btn-mic").classList.remove("recording");
+}
+
+// HUD mic button → live voice (independent from in-chat record-to-thread PTT)
+const hudMic = $("#btn-mic");
+hudMic.addEventListener("mousedown",   (e) => { e.preventDefault(); startLiveVoice(); });
+hudMic.addEventListener("mouseup",     stopLiveVoice);
+hudMic.addEventListener("mouseleave",  stopLiveVoice);
+hudMic.addEventListener("touchstart",  (e) => { e.preventDefault(); startLiveVoice(); }, { passive: false });
+hudMic.addEventListener("touchend",    (e) => { e.preventDefault(); stopLiveVoice(); },  { passive: false });
+hudMic.addEventListener("touchcancel", stopLiveVoice);
 
 // ============================================================ PROFILE UI ====
 let profileOpen = false;
@@ -763,6 +914,16 @@ function render() {
     ctx.textAlign     = "center";
     ctx.textBaseline  = "middle";
     ctx.fillText(p.icon || "●", x, y);
+
+    // Speaking ring (pulses when live voice is active)
+    if (speaking.has(p.id)) {
+      const pulse = 0.5 + 0.5 * Math.abs(Math.sin(Date.now() / 220));
+      ctx.beginPath();
+      ctx.arc(x, y, 28 + pulse * 5, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(124,252,155,${0.5 + 0.5 * pulse})`;
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
 
     // Name above dot
     ctx.font          = "bold 11px system-ui, sans-serif";
