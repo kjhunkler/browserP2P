@@ -25,6 +25,13 @@
   };
 
   const HARD = { [T.DIRT]: 1, [T.ROCK]: 2, [T.DENSE]: 3, [T.OBSID]: 4, [T.HAZARD]: 1 };
+  const DIG_MS = {
+    [T.DIRT]: 500,
+    [T.ROCK]: 800,
+    [T.DENSE]: 1100,
+    [T.OBSID]: 1500,
+    [T.HAZARD]: 300,
+  };
   const LOOT = { coin: 3, gold: 9, gem: 22, diamond: 60 };
   const SHOP = [
     { key: "dig", name: "Pickaxe", emoji: "⛏️", desc: "Break harder rock", costs: [25, 60, 140], max: 4 },
@@ -54,6 +61,8 @@
     let buttonRects = {};
     let message = "Dig together. Swipe or use WASD.";
     let messageUntil = 0;
+    let particles = [];
+    let audioCtx = null;
 
     const world = new Map();
     const miners = new Map();
@@ -69,6 +78,35 @@
     }
     function now() { return performance.now(); }
     function isHost() { return !!host.isHost(); }
+
+    function playSound(kind) {
+      try {
+        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        const t = audioCtx.currentTime;
+        const tones = {
+          dig: [180, 0.045, 0.035],
+          break: [95, 0.08, 0.055],
+          treasure: [520, 0.09, 0.06],
+          ladder: [330, 0.06, 0.04],
+          buy: [620, 0.08, 0.05],
+          wrong: [120, 0.10, 0.045],
+          hurt: [80, 0.16, 0.06],
+        };
+        const [freq, dur, vol] = tones[kind] || tones.dig;
+        osc.type = kind === "treasure" || kind === "buy" ? "triangle" : "square";
+        osc.frequency.setValueAtTime(freq, t);
+        if (kind === "break") osc.frequency.exponentialRampToValueAtTime(55, t + dur);
+        gain.gain.setValueAtTime(vol, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(t);
+        osc.stop(t + dur);
+      } catch {}
+    }
 
     function resize() {
       const rect = canvas.getBoundingClientRect();
@@ -122,6 +160,53 @@
       world.set(key(x, y), tile);
       dirtyTiles.add(key(x, y));
       lastFullSnapshotDirty = true;
+    }
+
+    function spawnTileParticles(col, row, color, count = 10) {
+      const px = screenX(col) + cell / 2;
+      const py = screenY(row) + cell / 2;
+      for (let i = 0; i < count; i++) {
+        particles.push({
+          x: px,
+          y: py,
+          vx: (Math.random() - 0.5) * 3.2,
+          vy: -Math.random() * 2.8 - 0.5,
+          life: 24 + Math.random() * 18,
+          color,
+        });
+      }
+      if (particles.length > 180) particles.splice(0, particles.length - 180);
+    }
+
+    function updateParticles() {
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.18;
+        p.life--;
+        if (p.life <= 0) particles.splice(i, 1);
+      }
+    }
+
+    function drawParticles() {
+      for (const p of particles) {
+        ctx.globalAlpha = Math.max(0, Math.min(1, p.life / 32));
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    function tileColor(type) {
+      switch (type) {
+        case T.DIRT: return "#7a4a28";
+        case T.ROCK: return "#69707a";
+        case T.DENSE: return "#46515d";
+        case T.OBSID: return "#2a2238";
+        case T.HAZARD: return "#2d7a48";
+        default: return "#7a4a28";
+      }
     }
 
     function ensureGeneratedTo(maxY) {
@@ -187,6 +272,7 @@
           stam: 20,
           ladders: 5,
           moveLockUntil: 0,
+          mining: null,
           dead: false,
           msg: "Ready",
           msgUntil: 0,
@@ -246,6 +332,10 @@
       return t === T.EMPTY || t === T.LADDER;
     }
 
+    function digTimeFor(m, type) {
+      return Math.max(120, (DIG_MS[type] || 500) - (m.digLvl || 0) * 200);
+    }
+
     function diagClear(m, dx, dy) {
       if (dx === 0 || dy === 0) return true;
       if (dy < 0) return isOpen(m.x, m.y + dy);
@@ -260,6 +350,14 @@
       }
       if (fell >= 2) damage(m, 1, "Hard landing");
       enterTile(m);
+      return fell;
+    }
+
+    function settleAll(exceptId = null) {
+      for (const other of miners.values()) {
+        if (other.dead || other.id === exceptId) continue;
+        if (settle(other) > 0) lastFullSnapshotDirty = true;
+      }
     }
 
     function enterTile(m) {
@@ -283,6 +381,7 @@
         m.carry = 0;
         setMsg(m, "Out of hearts. Tap restart.", 3000);
       }
+      if (m.id === myId) playSound("hurt");
     }
 
     function collect(m, amount) {
@@ -294,6 +393,7 @@
       const got = Math.min(room, amount);
       m.carry += got;
       setMsg(m, "+" + got + " treasure", 1000);
+      if (m.id === myId) playSound("treasure");
     }
 
     function moveMiner(id, dx, dy) {
@@ -308,7 +408,10 @@
       const ny = m.y + dy;
       if (nx < 0 || nx >= COLS || ny < SURFACE_Y) return;
 
+      if (m.mining && (m.mining.dx !== dx || m.mining.dy !== dy)) m.mining = null;
+
       if (ny <= SURFACE_Y) {
+        m.mining = null;
         m.x = nx;
         m.y = ny;
         enterTile(m);
@@ -329,6 +432,7 @@
       }
 
       if (isOpen(nx, ny)) {
+        m.mining = null;
         m.x = nx;
         m.y = ny;
         enterTile(m);
@@ -356,6 +460,7 @@
       setTile(m.x, ty, { type: T.LADDER, loot: 0 });
       m.ladders--;
       setMsg(m, "Ladder placed", 1000);
+      if (m.id === myId) playSound("ladder");
     }
 
     function restartMiner(id) {
@@ -371,6 +476,7 @@
         stam: maxStam(m),
         ladders: Math.max(m.ladders, 3),
         moveLockUntil: 0,
+        mining: null,
         dead: false,
         banked,
       });
@@ -390,6 +496,7 @@
         m.banked -= item.cost;
         m.ladders += 5;
         setMsg(m, "Bought ladders", 1200);
+      if (m.id === myId) playSound("buy");
         return;
       }
       const levelKey = item.key + "Lvl";
@@ -403,6 +510,22 @@
       m.hp = maxHp(m);
       m.stam = maxStam(m);
       setMsg(m, item.name + " upgraded", 1200);
+      if (m.id === myId) playSound("buy");
+    }
+
+    function startMine(m, nx, ny, dx, dy, movesInto = true) {
+      const t = tileAt(nx, ny);
+      m.mining = {
+        x: nx,
+        y: ny,
+        dx,
+        dy,
+        movesInto,
+        startedAt: now(),
+        required: digTimeFor(m, t.type),
+      };
+      lastFullSnapshotDirty = true;
+      if (m.id === myId) playSound("dig");
     }
 
     function mineTile(m, nx, ny, movesInto = true) {
@@ -418,19 +541,54 @@
         return;
       }
 
+      const dx = Math.sign(nx - m.x);
+      const dy = Math.sign(ny - m.y);
+      if (!m.mining || m.mining.x !== nx || m.mining.y !== ny || m.mining.movesInto !== movesInto) {
+        startMine(m, nx, ny, dx, dy, movesInto);
+      }
+    }
+
+    function finishMine(m, mining) {
+      const nx = mining.x;
+      const ny = mining.y;
+      const t = tileAt(nx, ny);
+      if (t.type === T.EMPTY || t.type === T.LADDER) return;
+
       m.stam--;
       setTile(nx, ny, { type: T.EMPTY, loot: 0 });
+      spawnTileParticles(nx, ny, tileColor(t.type), t.loot ? 16 : 9);
+      if (m.id === myId) playSound(t.loot ? "treasure" : "break");
       if (t.type === T.HAZARD) {
         damage(m, 1, "Gas pocket");
       } else if (t.loot) {
         collect(m, t.loot);
       }
 
-      if (movesInto) {
+      if (mining.movesInto) {
         m.x = nx;
         m.y = ny;
         enterTile(m);
         settle(m);
+      }
+      settleAll(mining.movesInto ? m.id : null);
+    }
+
+    function updateMining() {
+      const tNow = now();
+      for (const m of miners.values()) {
+        const mining = m.mining;
+        if (!mining || m.dead) continue;
+        const t = tileAt(mining.x, mining.y);
+        if (t.type === T.EMPTY || t.type === T.LADDER || m.stam <= 0) {
+          m.mining = null;
+          lastFullSnapshotDirty = true;
+          continue;
+        }
+        if (tNow - mining.startedAt >= mining.required) {
+          m.mining = null;
+          finishMine(m, mining);
+          lastFullSnapshotDirty = true;
+        }
       }
     }
 
@@ -455,10 +613,12 @@
 
     function makeSnapshot(full) {
       syncPlayerList();
+      const tNow = now();
+      const hasActiveMining = [...miners.values()].some((m) => !!m.mining);
       const maxY = Math.max(16, ...[...miners.values()].map((m) => m.y + FULL_SNAPSHOT_MARGIN_ROWS));
       if (maxY > generatedMaxY) lastFullSnapshotDirty = true;
       ensureGeneratedTo(maxY);
-      if (full && lastFullSnapshot && !lastFullSnapshotDirty) return lastFullSnapshot;
+      if (full && lastFullSnapshot && !lastFullSnapshotDirty && !hasActiveMining) return lastFullSnapshot;
       const tileKeys = full ? [...world.keys()] : [...dirtyTiles];
       const tiles = tileKeys.map((k) => {
         const p = fromKey(k);
@@ -487,6 +647,7 @@
           hp: m.hp,
           stam: m.stam,
           moveLockUntil: m.moveLockUntil || 0,
+          mining: m.mining ? { ...m.mining, elapsed: Math.max(0, tNow - m.mining.startedAt) } : null,
           maxHp: maxHp(m),
           maxStam: maxStam(m),
           bagCap: bagCap(m),
@@ -517,7 +678,12 @@
       }
       if (s.players) {
         miners.clear();
-        for (const p of s.players) miners.set(p.id, { ...p });
+        const tNow = now();
+        for (const p of s.players) {
+          const miner = { ...p };
+          if (miner.mining) miner.mining = { ...miner.mining, startedAt: tNow - (miner.mining.elapsed || 0) };
+          miners.set(p.id, miner);
+        }
       }
     }
 
@@ -543,33 +709,83 @@
 
     function drawTile(type, x, y, size) {
       if (type === T.EMPTY) return;
-      const colors = {
-        [T.DIRT]: "#7a4a28",
-        [T.ROCK]: "#69707a",
-        [T.DENSE]: "#46515d",
-        [T.OBSID]: "#2a2238",
-        [T.HAZARD]: "#2d7a48",
-        [T.LADDER]: "#c99743",
-        [T.BEDROCK]: "#101018",
-      };
-      ctx.fillStyle = colors[type] || "#7a4a28";
-      ctx.fillRect(x, y, size, size);
-      ctx.fillStyle = "rgba(255,255,255,0.08)";
-      ctx.fillRect(x + 2, y + 2, size - 4, Math.max(2, size * 0.12));
       if (type === T.LADDER) {
-        ctx.strokeStyle = "#6d431a";
-        ctx.lineWidth = 3;
+        drawLadderTile(x, y, size);
+        return;
+      }
+      const base = type === T.BEDROCK ? "#101018" : tileColor(type);
+      ctx.fillStyle = base;
+      ctx.fillRect(x, y, size, size);
+      ctx.fillStyle = "rgba(255,255,255,0.09)";
+      ctx.fillRect(x + 1, y + 1, size - 2, Math.max(2, size * 0.10));
+      ctx.fillStyle = "rgba(0,0,0,0.16)";
+      ctx.fillRect(x, y + size * 0.82, size, size * 0.18);
+      if (type !== T.BEDROCK) {
+        ctx.fillStyle = "rgba(0,0,0,0.13)";
+        ctx.fillRect(x + size * 0.18, y + size * 0.22, size * 0.15, size * 0.13);
+        ctx.fillRect(x + size * 0.62, y + size * 0.55, size * 0.13, size * 0.12);
+        ctx.fillStyle = "rgba(255,255,255,0.10)";
+        ctx.fillRect(x + size * 0.48, y + size * 0.18, size * 0.10, size * 0.08);
+      }
+      if (type === T.ROCK || type === T.DENSE || type === T.OBSID) {
+        ctx.strokeStyle = "rgba(255,255,255,0.10)";
+        ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(x + size * 0.32, y + 5); ctx.lineTo(x + size * 0.32, y + size - 5);
-        ctx.moveTo(x + size * 0.68, y + 5); ctx.lineTo(x + size * 0.68, y + size - 5);
-        for (let yy = y + 10; yy < y + size; yy += size * 0.28) {
-          ctx.moveTo(x + size * 0.28, yy); ctx.lineTo(x + size * 0.72, yy);
-        }
+        ctx.moveTo(x + size * 0.15, y + size * 0.62);
+        ctx.lineTo(x + size * 0.40, y + size * 0.48);
+        ctx.lineTo(x + size * 0.70, y + size * 0.60);
         ctx.stroke();
       }
       if (type === T.HAZARD) {
         ctx.fillStyle = "rgba(124,255,158,0.65)";
         ctx.beginPath(); ctx.arc(x + size * 0.5, y + size * 0.52, size * 0.18, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
+    function drawLadderTile(x, y, size) {
+      ctx.strokeStyle = "#d0a15a";
+      ctx.lineWidth = Math.max(3, size * 0.08);
+      ctx.lineCap = "butt";
+      const lx = x + size * 0.32;
+      const rx = x + size * 0.68;
+      ctx.beginPath();
+      ctx.moveTo(lx, y - 1); ctx.lineTo(lx, y + size + 1);
+      ctx.moveTo(rx, y - 1); ctx.lineTo(rx, y + size + 1);
+      for (let yy = y + size * 0.2; yy < y + size; yy += size * 0.28) {
+        ctx.moveTo(lx, yy); ctx.lineTo(rx, yy);
+      }
+      ctx.stroke();
+    }
+
+    function drawMiningOverlays() {
+      const tNow = now();
+      for (const m of miners.values()) {
+        const mining = m.mining;
+        if (!mining) continue;
+        const x = screenX(mining.x);
+        const y = screenY(mining.y);
+        const prog = Math.max(0, Math.min(1, (tNow - mining.startedAt) / Math.max(1, mining.required)));
+        ctx.fillStyle = `rgba(0,0,0,${0.12 + prog * 0.24})`;
+        ctx.fillRect(x, y, cell + 1, cell + 1);
+        ctx.strokeStyle = "rgba(20,14,10,0.75)";
+        ctx.lineWidth = Math.max(1.5, cell * 0.045);
+        ctx.beginPath();
+        ctx.moveTo(x + cell * 0.22, y + cell * 0.24);
+        ctx.lineTo(x + cell * (0.42 + prog * 0.28), y + cell * 0.48);
+        ctx.lineTo(x + cell * 0.30, y + cell * (0.70 + prog * 0.1));
+        if (prog > 0.45) {
+          ctx.moveTo(x + cell * 0.62, y + cell * 0.20);
+          ctx.lineTo(x + cell * 0.52, y + cell * 0.55);
+          ctx.lineTo(x + cell * 0.78, y + cell * 0.82);
+        }
+        ctx.stroke();
+        const bw = cell * 0.68;
+        const bx = x + (cell - bw) / 2;
+        const by = y + cell * 0.78;
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(bx, by, bw, Math.max(3, cell * 0.10));
+        ctx.fillStyle = "#ffd35a";
+        ctx.fillRect(bx, by, bw * prog, Math.max(3, cell * 0.10));
       }
     }
 
@@ -608,11 +824,13 @@
       ctx.fillText(hearts, W - 152, 20);
       ctx.fillStyle = "#7cfc9b";
       ctx.fillText("⚡" + (me?.stam || 0) + "/" + (me?.maxStam || 20), W - 152, 43);
+      ctx.fillStyle = "#d0a15a";
+      ctx.fillText("🪜" + (me?.ladders || 0), W - 78, 43);
 
       buttonRects = {
         ladder: { x: W - 132, y: topPad + 10, w: 54, h: 42 },
-        shop: { x: W - 70, y: topPad + 10, w: 54, h: 42 },
       };
+      if (me?.y <= SURFACE_Y) buttonRects.shop = { x: W - 70, y: topPad + 10, w: 54, h: 42 };
       for (const [name, r] of Object.entries(buttonRects)) {
         ctx.fillStyle = "rgba(28,28,46,0.92)";
         roundRect(r.x, r.y, r.w, r.h, 13);
@@ -724,9 +942,17 @@
       const W = canvas.clientWidth;
       const H = canvas.clientHeight;
       ctx.clearRect(0, 0, W, H);
-      ctx.fillStyle = "#87c9ff";
+      const skyGrad = ctx.createLinearGradient(0, 0, 0, Math.max(topPad + 80, H * 0.4));
+      skyGrad.addColorStop(0, "#182154");
+      skyGrad.addColorStop(0.55, "#3d74bb");
+      skyGrad.addColorStop(1, "#78bde7");
+      ctx.fillStyle = skyGrad;
       ctx.fillRect(0, 0, W, topPad + (SURFACE_Y - camY + 1) * cell);
-      ctx.fillStyle = "#15111f";
+      const depthGrad = ctx.createLinearGradient(0, topPad, 0, H);
+      depthGrad.addColorStop(0, "#24182b");
+      depthGrad.addColorStop(0.45, "#17111f");
+      depthGrad.addColorStop(1, "#090711");
+      ctx.fillStyle = depthGrad;
       ctx.fillRect(0, topPad + (1 - camY) * cell, W, H);
 
       const me = miners.get(myId) || latest?.players?.find((p) => p.id === myId) || [...miners.values()][0];
@@ -749,6 +975,8 @@
           }
         }
       }
+      drawMiningOverlays();
+      drawParticles();
 
       ctx.fillStyle = "#56aa45";
       ctx.fillRect(0, screenY(SURFACE_Y + 1) - 5, W, 8);
@@ -763,6 +991,8 @@
       lastTs = ts;
       if (isHost()) {
         syncPlayerList();
+        updateMining();
+        updateParticles();
         if (ts - lastSnapshotAt > 1000 / SNAPSHOT_HZ) {
           broadcastSnapshot(!latest);
           lastSnapshotAt = ts;
