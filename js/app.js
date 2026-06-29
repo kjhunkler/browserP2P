@@ -41,7 +41,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "1.5.0";
+const APP_VERSION = "1.7.0";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -271,6 +271,7 @@ profiles.set(MY_ID, { name: profile.name, color: myColor, icon: profile.icon });
 let net = new PeerNet();
 let autoMode = true;
 let hasLeftLobby = false;
+let migratingFromHostId = null;
 
 // ============================================================ DOM ===========
 const $ = (sel) => document.querySelector(sel);
@@ -311,9 +312,13 @@ function addPlayer(id, name, peerId, icon, preferredColor) {
 // ============================================================ NET WIRING ====
 function wireNetEvents() {
   net.on("ready", () => {
+    players.clear();
+    peerMap.clear();
+    usedColors.clear();
     if (lastState.length > 0) {
       // Host migration: restore last snapshot so players keep colors and positions.
       for (const p of lastState) {
+        if (p.id === migratingFromHostId) continue;
         players.set(p.id, { ...p, icon: p.icon || DEFAULT_ICON });
         usedColors.add(p.color);
         profiles.set(p.id, { name: p.name, color: p.color, icon: p.icon || DEFAULT_ICON });
@@ -321,6 +326,7 @@ function wireNetEvents() {
     } else {
       addPlayer(MY_ID, profile.name, null, profile.icon, profile.color);
     }
+    migratingFromHostId = null;
     startHostLoop();
     renderLobby();
     show("lobby");
@@ -351,11 +357,14 @@ function wireNetEvents() {
   net.on("host-closed", () => {
     if (hasLeftLobby) return;
     if (!autoMode) { alert("The host left. Game over."); location.reload(); return; }
-    const myIndex = lastHostOrder.indexOf(MY_ID);
-    const delay = Math.max(0, myIndex) * 700;
-    hostLoopRunning = false;
+    migratingFromHostId = lastHostOrder[0] || null;
+    const remainingOrder = migratingFromHostId ? lastHostOrder.filter((id) => id !== migratingFromHostId) : [MY_ID];
+    const myIndex = remainingOrder.indexOf(MY_ID);
+    if (myIndex < 0) return;
+    const delay = myIndex * 700;
+    stopHostLoop();
     setTimeout(() => {
-      if (!hasLeftLobby) net.migrate(AUTO_CHANNEL);
+      if (!hasLeftLobby) net.migrate(AUTO_CHANNEL, myIndex === 0);
     }, delay);
   });
 
@@ -485,13 +494,15 @@ function handleClientMsg(msg) {
 
 // ============================================================ HOST LOOP =====
 let hostLoopRunning = false;
+let hostLoopTimer = null;
 let lastState = [];
 let lastHostOrder = [];
 
 function startHostLoop() {
   if (hostLoopRunning) return;
   hostLoopRunning = true;
-  setInterval(() => {
+  hostLoopTimer = setInterval(() => {
+    if (!hostLoopRunning || !net.isHost) return;
     const list = [...players.values()].map(p => ({
       id: p.id, name: p.name, color: p.color, icon: p.icon, x: p.x, y: p.y,
     }));
@@ -500,6 +511,21 @@ function startHostLoop() {
     lastState = list;
     lastHostOrder = hostOrder;
   }, 1000 / TICK_HZ);
+}
+
+function stopHostLoop() {
+  hostLoopRunning = false;
+  clearInterval(hostLoopTimer);
+  hostLoopTimer = null;
+}
+
+function joinCode(code) {
+  autoMode = false;
+  hasLeftLobby = false;
+  setStatus("Connecting…");
+  renderLobby();
+  show("lobby");
+  net.join(code);
 }
 
 // ============================================================ CHAT =========
@@ -995,12 +1021,13 @@ function closeProfileSheet() {
 function leaveLobby() {
   hasLeftLobby = true;
   autoMode = false;
-  hostLoopRunning = false;
+  stopHostLoop();
   stopLiveVoice();
   net.destroy();
   players.clear();
   peerMap.clear();
   usedColors.clear();
+  lobbyListKey = "";
   lastState = [];
   lastHostOrder = [];
   drawing = false;
@@ -1116,23 +1143,34 @@ function renderLobby() {
   $("#lobby-code").textContent = code;
   const joinUrl = `${location.origin}${location.pathname}?join=${code}`;
   $("#join-url").textContent = code === "----" ? "Joining lobby…" : joinUrl.replace(/^https?:\/\//, "");
-  if (code === "----") $("#qr").innerHTML = "";
-  else drawQR(joinUrl);
+  if (code === "----") {
+    $("#qr").innerHTML = "";
+    qrText = "";
+  } else if (joinUrl !== qrText) {
+    drawQR(joinUrl);
+  }
   const list = $("#player-list");
-  list.innerHTML = "";
   const lobbyPlayers = net.isHost ? Array.from(players.values()) : lastState;
-  for (const p of lobbyPlayers) {
-    const li = document.createElement("li");
-    li.innerHTML = `<span class="swatch" style="background:${p.color}"></span>${esc(p.name)}`;
-    list.appendChild(li);
+  const nextListKey = lobbyPlayers.map((p) => `${p.id}:${p.name}:${p.color}`).join("|");
+  if (nextListKey !== lobbyListKey) {
+    list.innerHTML = "";
+    for (const p of lobbyPlayers) {
+      const li = document.createElement("li");
+      li.innerHTML = `<span class="swatch" style="background:${p.color}"></span>${esc(p.name)}`;
+      list.appendChild(li);
+    }
+    lobbyListKey = nextListKey;
   }
   $("#player-count").textContent = lobbyPlayers.length;
 }
 
 let qr = null;
+let qrText = "";
+let lobbyListKey = "";
 function drawQR(text) {
   const el = $("#qr");
   el.innerHTML = "";
+  qrText = text;
   qr = new QRCode(el, { text, width: 180, height: 180, correctLevel: QRCode.CorrectLevel.M });
 }
 
@@ -1283,6 +1321,18 @@ $("#btn-auto").addEventListener("click", () => {
 });
 
 $("#btn-host").addEventListener("click", () => {
+  stopHostLoop();
+  net.destroy();
+  net = new PeerNet();
+  wireNetEvents();
+  autoMode = false;
+  hasLeftLobby = false;
+  players.clear();
+  peerMap.clear();
+  usedColors.clear();
+  lobbyListKey = "";
+  lastState = [];
+  lastHostOrder = [];
   setStatus("");
   net.host();
 });
@@ -1290,8 +1340,11 @@ $("#btn-host").addEventListener("click", () => {
 $("#btn-join").addEventListener("click", () => {
   const code = $("#code-input").value.trim().toUpperCase();
   if (code.length !== 4) { setStatus("Enter the 4-character code."); return; }
-  setStatus("Connecting…");
-  net.join(code);
+  stopHostLoop();
+  net.destroy();
+  net = new PeerNet();
+  wireNetEvents();
+  joinCode(code);
 });
 
 $("#btn-start").addEventListener("click", () => show("play"));
@@ -1299,7 +1352,8 @@ $("#btn-draw").addEventListener("click", () => setDrawMode(!drawMode));
 
 // Auto-join from QR link (?join=CODE).
 const joinParam = new URLSearchParams(location.search).get("join");
-if (joinParam) $("#code-input").value = joinParam.toUpperCase();
+const autoJoinCode = joinParam?.trim().toUpperCase();
+if (autoJoinCode) $("#code-input").value = autoJoinCode;
 
 // ============================================================ PROFILE ACTIONS
 $("#btn-profile").addEventListener("click", openProfileSheet);
@@ -1334,5 +1388,6 @@ function esc(s) {
 // Kick off the render loop; draws nothing until we're playing.
 registerServiceWorker();
 requestWakeLock();
-enterDefaultLobby();
+if (autoJoinCode && autoJoinCode.length === 4) joinCode(autoJoinCode);
+else enterDefaultLobby();
 render();

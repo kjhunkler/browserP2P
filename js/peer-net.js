@@ -39,6 +39,7 @@ class PeerNet {
     this.conns = new Map(); // host: peerId -> DataConnection
     this.hostConn = null; // client: connection to the host
     this._handlers = new Map();
+    this._closed = false;
   }
 
   on(event, fn) {
@@ -55,13 +56,16 @@ class PeerNet {
   /* ----- HOST ----- */
   // Registers under a fresh room code; retries if the code is already taken.
   host() {
+    this._closed = false;
     this.isHost = true;
     const tryCode = (attemptsLeft) => {
+      if (this._closed) return;
       const code = makeCode();
       const peer = new Peer(PREFIX + code, { debug: 1 });
       this.peer = peer;
 
       peer.on("open", () => {
+        if (this._closed) return;
         this.code = code;
         this._emit("ready");
       });
@@ -69,6 +73,7 @@ class PeerNet {
       this._acceptConnections(peer);
 
       peer.on("error", (err) => {
+        if (this._closed) return;
         // Code collision on the public broker — pick another and retry.
         if (err.type === "unavailable-id" && attemptsLeft > 0) {
           peer.destroy();
@@ -86,11 +91,13 @@ class PeerNet {
   _acceptConnections(peer) {
     peer.on("connection", (conn) => {
       conn.on("open", () => {
+        if (this._closed) return;
         this.conns.set(conn.peer, conn);
         this._emit("peer-join", conn.peer);
       });
-      conn.on("data", (data) => this._emit("message", { from: conn.peer, data }));
+      conn.on("data", (data) => { if (!this._closed) this._emit("message", { from: conn.peer, data }); });
       conn.on("close", () => {
+        if (this._closed) return;
         this.conns.delete(conn.peer);
         this._emit("peer-leave", conn.peer);
       });
@@ -106,12 +113,14 @@ class PeerNet {
   // shared with anyone running the app at the same moment. Pass a `channel`
   // string to scope it to your group if you ever collide.
   auto(channel) {
+    this._closed = false;
     this._autoId = PREFIX + "auto" + (channel ? "-" + channel : "");
     this.code = this._autoId.slice(PREFIX.length);
     this._tryJoinThenHost();
   }
 
   _tryJoinThenHost(attempt = 0) {
+    if (this._closed) return;
     if (attempt > 10) { this._emit("error", { type: "election-failed" }); return; }
 
     this.isHost = false;
@@ -120,29 +129,31 @@ class PeerNet {
     let settled = false;
 
     peer.on("open", () => {
+      if (this._closed) return;
       const conn = peer.connect(this._autoId, { reliable: true });
       this.hostConn = conn;
 
       // Safety net: host registered but not responding (e.g. stale broker slot
       // from a recently-closed tab). Give it 2.5s then try to claim the host role.
       const timer = setTimeout(() => {
-        if (settled) return;
+        if (settled || this._closed) return;
         settled = true;
         peer.destroy();
         this._becomeHost(attempt);
       }, 2500);
 
       conn.on("open", () => {
-        if (settled) return;
+        if (settled || this._closed) return;
         settled = true;
         clearTimeout(timer);
         this._emit("connected");
       });
-      conn.on("data",  (data) => this._emit("message", { from: "host", data }));
-      conn.on("close", ()     => this._emit("host-closed"));
+      conn.on("data",  (data) => { if (!this._closed) this._emit("message", { from: "host", data }); });
+      conn.on("close", ()     => { if (!this._closed) this._emit("host-closed"); });
     });
 
     peer.on("error", (err) => {
+      if (this._closed) return;
       // No host registered yet — become it.
       if (err.type === "peer-unavailable" && !settled) {
         settled = true;
@@ -155,21 +166,23 @@ class PeerNet {
   }
 
   _becomeHost(attempt = 0) {
+    if (this._closed) return;
     this.isHost = true;
     const peer = new Peer(this._autoId, { debug: 1 });
     this.peer = peer;
 
-    peer.on("open", () => this._emit("ready"));
+    peer.on("open", () => { if (!this._closed) this._emit("ready"); });
     this._acceptConnections(peer);
 
     peer.on("error", (err) => {
+      if (this._closed) return;
       if (err.type === "unavailable-id") {
         // Another device registered the host id just before us (race), or a
         // stale broker slot from a previous session hasn't expired yet.
         // Back off with exponential delay and try joining again.
         peer.destroy();
         const backoff = Math.min(300 * Math.pow(2, attempt), 6000);
-        setTimeout(() => this._tryJoinThenHost(attempt + 1), backoff);
+        setTimeout(() => { if (!this._closed) this._tryJoinThenHost(attempt + 1); }, backoff);
       } else {
         this._emit("error", err);
       }
@@ -178,20 +191,22 @@ class PeerNet {
 
   /* ----- CLIENT ----- */
   join(code) {
+    this._closed = false;
     this.isHost = false;
     this.code = code;
     const peer = new Peer({ debug: 1 }); // random id assigned by the broker
     this.peer = peer;
 
     peer.on("open", () => {
+      if (this._closed) return;
       const conn = peer.connect(PREFIX + code, { reliable: true });
       this.hostConn = conn;
-      conn.on("open", () => this._emit("connected"));
-      conn.on("data", (data) => this._emit("message", { from: "host", data }));
-      conn.on("close", () => this._emit("host-closed"));
+      conn.on("open", () => { if (!this._closed) this._emit("connected"); });
+      conn.on("data", (data) => { if (!this._closed) this._emit("message", { from: "host", data }); });
+      conn.on("close", () => { if (!this._closed) this._emit("host-closed"); });
     });
 
-    peer.on("error", (err) => this._emit("error", err));
+    peer.on("error", (err) => { if (!this._closed) this._emit("error", err); });
   }
 
   /* ----- messaging ----- */
@@ -220,16 +235,19 @@ class PeerNet {
   // Re-run the auto election on an existing instance (e.g. after the host
   // leaves). Tears down the current connection and participates in a new
   // host election on the same channel, keeping all registered event handlers.
-  migrate(channel) {
+  migrate(channel, preferHost = false) {
     this.destroy();
+    this._closed = false;
     this.isHost = false;
     this.code = null;
     this._autoId = PREFIX + "auto" + (channel ? "-" + channel : "");
     this.code = this._autoId.slice(PREFIX.length);
-    this._tryJoinThenHost();
+    if (preferHost) this._becomeHost();
+    else this._tryJoinThenHost();
   }
 
   destroy() {
+    this._closed = true;
     if (this.peer) this.peer.destroy();
     this.peer = null;
     this.conns.clear();
