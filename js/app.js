@@ -41,7 +41,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "1.9.1";
+const APP_VERSION = "1.9.2";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -66,7 +66,7 @@ async function registerServiceWorker() {
   }
 
   try {
-    swRegistration = await navigator.serviceWorker.register("./sw.js");
+    swRegistration = await navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" });
     if (swRegistration.waiting) refreshReady(swRegistration);
     swRegistration.addEventListener("updatefound", () => {
       const worker = swRegistration.installing;
@@ -78,6 +78,25 @@ async function registerServiceWorker() {
   } catch {
     setUpdateStatus("Offline caching could not be enabled.");
   }
+}
+
+function refreshCachedFiles() {
+  return new Promise((resolve, reject) => {
+    const controller = navigator.serviceWorker?.controller;
+    if (!controller) {
+      reject(new Error("No active service worker."));
+      return;
+    }
+
+    const channel = new MessageChannel();
+    const timer = setTimeout(() => reject(new Error("Update check timed out.")), 12000);
+    channel.port1.onmessage = (event) => {
+      clearTimeout(timer);
+      if (event.data?.ok) resolve(event.data);
+      else reject(new Error(event.data?.error || "Update check failed."));
+    };
+    controller.postMessage({ type: "REFRESH_APP_SHELL" }, [channel.port2]);
+  });
 }
 
 async function checkForUpdates() {
@@ -92,7 +111,9 @@ async function checkForUpdates() {
     if (swRegistration.waiting) {
       refreshReady(swRegistration);
     } else {
-      setUpdateStatus("You have the latest files.");
+      await refreshCachedFiles();
+      setUpdateStatus("Updated cached files. Restarting…");
+      setTimeout(() => location.reload(), 250);
     }
   } catch {
     setUpdateStatus("Could not check for updates.");

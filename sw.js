@@ -1,4 +1,4 @@
-const APP_VERSION = "1.9.1";
+const APP_VERSION = "1.9.2";
 const CACHE_NAME = `browserp2p-${APP_VERSION}`;
 const APP_SHELL = [
   "./",
@@ -70,4 +70,24 @@ self.addEventListener("message", (event) => {
   if (event.data?.type === "SKIP_WAITING") {
     self.skipWaiting();
   }
+
+  if (event.data?.type === "REFRESH_APP_SHELL") {
+    event.waitUntil(
+      refreshAppShell()
+        .then(() => event.ports[0]?.postMessage({ ok: true, version: APP_VERSION }))
+        .catch((error) => event.ports[0]?.postMessage({ ok: false, error: error.message }))
+    );
+  }
 });
+
+async function refreshAppShell() {
+  const cache = await caches.open(CACHE_NAME);
+  const stamp = Date.now();
+  const results = await Promise.allSettled(APP_SHELL.map(async (url) => {
+    const bust = url.includes("?") ? "&" : "?";
+    const response = await fetch(`${url}${bust}cache-bust=${stamp}`, { cache: "reload" });
+    if (!(response.ok || response.type === "opaque")) throw new Error(`Failed to refresh ${url}`);
+    await cache.put(url, response);
+  }));
+  if (results.every((result) => result.status === "rejected")) throw new Error("No files refreshed.");
+}
