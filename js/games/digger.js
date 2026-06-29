@@ -197,6 +197,69 @@
       }
     }
 
+    function cavernNoise(x, y, salt = 0) {
+      const n = Math.sin(x * 127.1 + y * 311.7 + salt * 74.7) * 43758.5453;
+      return n - Math.floor(n);
+    }
+
+    function drawCavernBackground(col, row, x, y, size) {
+      if (row <= SURFACE_Y) return;
+      const depth = Math.min(1, row / 42);
+      const baseAlpha = 0.18 + depth * 0.28;
+      ctx.fillStyle = `rgba(4,3,10,${baseAlpha})`;
+      ctx.fillRect(x, y, size + 1, size + 1);
+
+      const n = cavernNoise(col, row);
+      if (n > 0.42) {
+        ctx.fillStyle = `rgba(0,0,0,${0.10 + depth * 0.18})`;
+        ctx.beginPath();
+        ctx.ellipse(x + size * (0.25 + cavernNoise(col, row, 1) * 0.5), y + size * 0.52, size * (0.35 + n * 0.22), size * 0.34, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      if (row > 8 && cavernNoise(col, row, 2) > 0.74) {
+        ctx.strokeStyle = `rgba(18,16,28,${0.35 + depth * 0.25})`;
+        ctx.lineWidth = Math.max(1, size * 0.035);
+        ctx.beginPath();
+        const cx = x + size * (0.25 + cavernNoise(col, row, 3) * 0.5);
+        ctx.moveTo(cx, y - 1);
+        ctx.lineTo(cx + size * 0.08, y + size * 0.35);
+        ctx.lineTo(cx - size * 0.03, y + size * 0.72);
+        ctx.lineTo(cx + size * 0.10, y + size + 1);
+        ctx.stroke();
+      }
+
+      if (row > 5 && cavernNoise(col, row - 1, 4) > 0.78) {
+        ctx.fillStyle = `rgba(35,32,46,${0.20 + depth * 0.18})`;
+        ctx.beginPath();
+        ctx.moveTo(x + size * 0.18, y);
+        ctx.lineTo(x + size * 0.35, y + size * (0.25 + cavernNoise(col, row, 5) * 0.35));
+        ctx.lineTo(x + size * 0.48, y);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      if (row > 6 && cavernNoise(col, row + 1, 6) > 0.78) {
+        ctx.fillStyle = `rgba(30,28,40,${0.18 + depth * 0.18})`;
+        ctx.beginPath();
+        ctx.moveTo(x + size * 0.52, y + size);
+        ctx.lineTo(x + size * 0.68, y + size * (0.58 - cavernNoise(col, row, 7) * 0.20));
+        ctx.lineTo(x + size * 0.82, y + size);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      if (row > 12 && cavernNoise(col, row, 8) > 0.86) {
+        const hue = 175 + Math.floor(cavernNoise(col, row, 9) * 100);
+        const alpha = 0.06 + depth * 0.10;
+        const grad = ctx.createRadialGradient(x + size * 0.5, y + size * 0.55, 1, x + size * 0.5, y + size * 0.55, size * 0.65);
+        grad.addColorStop(0, `hsla(${hue}, 90%, 62%, ${alpha})`);
+        grad.addColorStop(1, `hsla(${hue}, 90%, 45%, 0)`);
+        ctx.fillStyle = grad;
+        ctx.fillRect(x, y, size, size);
+      }
+    }
+
     function drawParticles() {
       for (const p of particles) {
         ctx.globalAlpha = Math.max(0, Math.min(1, p.life / 32));
@@ -1007,6 +1070,7 @@
       for (let y = startRow; y <= endRow; y++) {
         for (let x = startCol; x <= endCol; x++) {
           const t = isHost() ? tileAt(x, y) : world.get(key(x, y)) || { type: T.BEDROCK, loot: 0 };
+          if (t.type === T.EMPTY || t.type === T.LADDER) drawCavernBackground(x, y, screenX(x), screenY(y), cell);
           drawTile(t.type, screenX(x), screenY(y), cell);
           if (t.loot && t.type !== T.EMPTY) {
             ctx.fillStyle = t.loot >= LOOT.gem ? "#65d6ff" : "#ffd35a";
