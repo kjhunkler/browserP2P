@@ -41,7 +41,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "1.9.0";
+const APP_VERSION = "1.9.1";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -1032,14 +1032,23 @@ function stopLiveVoice() {
   $("#btn-mic").classList.remove("recording");
 }
 
-// HUD mic button → live voice (independent from in-chat record-to-thread PTT)
+// HUD mic button → toggle live voice (independent from in-chat record-to-thread PTT)
 const hudMic = $("#btn-mic");
-hudMic.addEventListener("mousedown",   (e) => { e.preventDefault(); startLiveVoice(); });
-hudMic.addEventListener("mouseup",     stopLiveVoice);
-hudMic.addEventListener("mouseleave",  stopLiveVoice);
-hudMic.addEventListener("touchstart",  (e) => { e.preventDefault(); startLiveVoice(); }, { passive: false });
-hudMic.addEventListener("touchend",    (e) => { e.preventDefault(); stopLiveVoice(); },  { passive: false });
-hudMic.addEventListener("touchcancel", stopLiveVoice);
+let lastMicTouch = 0;
+function toggleLiveVoice() {
+  if (liveStream) stopLiveVoice();
+  else startLiveVoice();
+}
+hudMic.addEventListener("click", (e) => {
+  if (Date.now() - lastMicTouch < 500) return;
+  e.preventDefault();
+  toggleLiveVoice();
+});
+hudMic.addEventListener("touchend", (e) => {
+  e.preventDefault();
+  lastMicTouch = Date.now();
+  toggleLiveVoice();
+}, { passive: false });
 
 // ============================================================ PROFILE UI ====
 let profileOpen = false;
