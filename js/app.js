@@ -41,7 +41,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "1.9.3";
+const APP_VERSION = "1.9.5";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -610,9 +610,15 @@ function replaceDrawing(strokes) {
 
 function clearDrawing(broadcast = true) {
   drawingStrokes.length = 0;
+  drawing = false;
   currentStroke = null;
-  saveDrawing();
+  try { localStorage.removeItem(DRAWING_KEY); } catch {}
   if (broadcast) sendDrawingClear();
+}
+
+function clearDrawingFromSettings() {
+  clearDrawing();
+  setUpdateStatus("Drawings cleared.");
 }
 
 function sendDrawingStroke(stroke) {
@@ -625,6 +631,16 @@ function sendDrawingClear() {
   const msg = { t: "draw-clear" };
   if (net.isHost) net.broadcast(msg);
   else net.send(msg);
+}
+
+function hostCrown(id) {
+  return id && id === currentHostId() ? "👑 " : "";
+}
+
+function currentHostId() {
+  if (lastHostOrder[0]) return lastHostOrder[0];
+  if (net.isHost) return MY_ID;
+  return null;
 }
 
 function drawStroke(stroke, rect) {
@@ -708,7 +724,7 @@ function renderChat() {
     el.innerHTML = `
       <div class="msg-avatar" style="background:${pf.color}">${pf.icon}</div>
       <div class="msg-body">
-        <div class="msg-name" style="color:${pf.color}">${esc(pf.name)}</div>
+        <div class="msg-name" style="color:${pf.color}">${hostCrown(entry.fromId)}${esc(pf.name)}</div>
         <div class="msg-bubble">${esc(entry.text)}</div>
       </div>`;
     log.appendChild(el);
@@ -1247,7 +1263,7 @@ function renderLobby() {
     list.innerHTML = "";
     for (const p of lobbyPlayers) {
       const li = document.createElement("li");
-      li.innerHTML = `<span class="swatch" style="background:${p.color}"></span>${esc(p.name)}`;
+      li.innerHTML = `<span class="swatch" style="background:${p.color}"></span>${hostCrown(p.id)}${esc(p.name)}`;
       list.appendChild(li);
     }
     lobbyListKey = nextListKey;
@@ -1397,7 +1413,7 @@ function render() {
     ctx.font          = "bold 11px system-ui, sans-serif";
     ctx.textBaseline  = "alphabetic";
     ctx.fillStyle     = "rgba(255,255,255,0.85)";
-    ctx.fillText(p.name, x, y - 32);
+    ctx.fillText(hostCrown(p.id) + p.name, x, y - 32);
   }
 
   requestAnimationFrame(render);
@@ -1459,9 +1475,7 @@ $("#btn-menu-settings")?.addEventListener("click", openProfileSheet);
 $("#btn-close-profile").addEventListener("click", closeProfileSheet);
 $("#app-version").textContent = APP_VERSION;
 $("#btn-check-update").addEventListener("click", checkForUpdates);
-$("#btn-clear-drawing").addEventListener("click", () => {
-  if (confirm("Clear all drawings for everyone?")) clearDrawing();
-});
+$("#btn-clear-drawing").addEventListener("click", clearDrawingFromSettings);
 $("#btn-leave-lobby").addEventListener("click", leaveLobby);
 $("#btn-keep-awake").addEventListener("click", toggleKeepAwake);
 syncWakeUi();
