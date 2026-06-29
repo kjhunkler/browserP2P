@@ -41,7 +41,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "1.1.0";
+const APP_VERSION = "1.2.0";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -100,6 +100,76 @@ async function checkForUpdates() {
 }
 
 navigator.serviceWorker?.addEventListener("controllerchange", () => location.reload());
+
+// ============================================================ NOTIFICATIONS =
+const NOTIFY_JOIN_KEY = "bp2p-notify-joins";
+let notifyJoins = localStorage.getItem(NOTIFY_JOIN_KEY) === "1";
+
+function canNotify() {
+  return "Notification" in window && Notification.permission === "granted" && notifyJoins;
+}
+
+function setNotificationStatus(text) {
+  const el = $("#notification-status");
+  if (el) el.textContent = text;
+}
+
+function syncNotificationUi() {
+  const btn = $("#btn-enable-notifications");
+  if (!btn) return;
+
+  if (!("Notification" in window)) {
+    btn.disabled = true;
+    btn.textContent = "Unavailable";
+    setNotificationStatus("This browser does not support local notifications.");
+    return;
+  }
+
+  if (Notification.permission === "denied") {
+    btn.disabled = true;
+    btn.textContent = "Blocked";
+    setNotificationStatus("Notifications are blocked in browser settings.");
+    return;
+  }
+
+  btn.disabled = false;
+  btn.textContent = notifyJoins && Notification.permission === "granted" ? "Enabled" : "Enable";
+  setNotificationStatus(
+    notifyJoins && Notification.permission === "granted"
+      ? "Join notifications are enabled."
+      : "Enable notifications to be alerted when someone joins."
+  );
+}
+
+async function enableJoinNotifications() {
+  if (!("Notification" in window)) {
+    syncNotificationUi();
+    return;
+  }
+
+  const permission = Notification.permission === "default"
+    ? await Notification.requestPermission()
+    : Notification.permission;
+
+  notifyJoins = permission === "granted";
+  localStorage.setItem(NOTIFY_JOIN_KEY, notifyJoins ? "1" : "0");
+  syncNotificationUi();
+}
+
+function notifyPlayerJoined(name) {
+  if (!canNotify()) return;
+  if (document.visibilityState === "visible" && !profileOpen && !chatOpen) return;
+
+  const notification = new Notification("browserP2P", {
+    body: `${name} joined the lobby`,
+    icon: "icons/robot.svg",
+    tag: "browserp2p-player-joined",
+  });
+  notification.onclick = () => {
+    window.focus();
+    notification.close();
+  };
+}
 
 // ============================================================ IDENTITY ======
 function clientId() {
@@ -245,6 +315,7 @@ function handleHostMsg(peerId, msg) {
     net.sendTo(peerId, { t: "history", chatLog });
     pushSys(p.name + " joined");
     net.broadcast({ t: "sys", text: p.name + " joined" });
+    if (p.id !== MY_ID) notifyPlayerJoined(p.name);
     renderLobby();
 
   } else if (msg.t === "input") {
@@ -330,6 +401,8 @@ function handleClientMsg(msg) {
 
   } else if (msg.t === "sys") {
     pushSys(msg.text);
+    const joined = msg.text.match(/^(.+) joined$/);
+    if (joined) notifyPlayerJoined(joined[1]);
   }
 }
 
@@ -1053,6 +1126,8 @@ $("#btn-close-profile").addEventListener("click", closeProfileSheet);
 $("#app-version").textContent = APP_VERSION;
 $("#btn-check-update").addEventListener("click", checkForUpdates);
 $("#btn-leave-lobby").addEventListener("click", leaveLobby);
+$("#btn-enable-notifications").addEventListener("click", enableJoinNotifications);
+syncNotificationUi();
 
 // ============================================================ CHAT ACTIONS ==
 $("#btn-chat").addEventListener("click", openChat);
