@@ -46,6 +46,7 @@
     let camY = 0;
     let latest = null;
     let drag = null;
+    let activePointerId = null;
     let shopOpen = false;
     let shopRects = [];
     let buttonRects = {};
@@ -707,6 +708,11 @@
 
     function onPointerDown(e) {
       if (profilePanelOpen()) return;
+      if (e.pointerId !== undefined) {
+        if (activePointerId !== null || e.isPrimary === false) return;
+        activePointerId = e.pointerId;
+        canvas.setPointerCapture?.(activePointerId);
+      }
       const p = eventPos(e);
       if (e.cancelable) e.preventDefault();
       if (shopOpen) {
@@ -714,17 +720,20 @@
           if (!hit(r, p)) continue;
           if (r.key === "close") shopOpen = false;
           else sendAction({ type: "buy", key: r.key });
+          activePointerId = null;
           return;
         }
         shopOpen = false;
+        activePointerId = null;
         return;
       }
-      if (hit(buttonRects.ladder, p)) { sendAction({ type: "ladder" }); return; }
-      if (hit(buttonRects.shop, p)) { shopOpen = true; return; }
+      if (hit(buttonRects.ladder, p)) { sendAction({ type: "ladder" }); activePointerId = null; return; }
+      if (hit(buttonRects.shop, p)) { shopOpen = true; activePointerId = null; return; }
       drag = p;
     }
 
     function onPointerMove(e) {
+      if (e.pointerId !== undefined && e.pointerId !== activePointerId) return;
       if (!drag || profilePanelOpen()) return;
       const p = eventPos(e);
       if (e.cancelable) e.preventDefault();
@@ -740,7 +749,12 @@
       drag = p;
     }
 
-    function onPointerUp() { drag = null; }
+    function onPointerUp(e) {
+      if (e?.pointerId !== undefined && e.pointerId !== activePointerId) return;
+      if (activePointerId !== null && canvas.hasPointerCapture?.(activePointerId)) canvas.releasePointerCapture(activePointerId);
+      activePointerId = null;
+      drag = null;
+    }
 
     function keyVec(key) {
       switch (key) {
@@ -768,26 +782,42 @@
         if (initialState) applySnapshot(initialState);
         else if (isHost()) resetHostState();
         window.addEventListener("resize", resize);
-        canvas.addEventListener("touchstart", onPointerDown, { passive: false });
-        window.addEventListener("touchmove", onPointerMove, { passive: false });
-        window.addEventListener("touchend", onPointerUp);
-        window.addEventListener("touchcancel", onPointerUp);
-        canvas.addEventListener("mousedown", onPointerDown);
-        window.addEventListener("mousemove", onPointerMove);
-        window.addEventListener("mouseup", onPointerUp);
+        if (window.PointerEvent) {
+          canvas.addEventListener("pointerdown", onPointerDown);
+          canvas.addEventListener("pointermove", onPointerMove);
+          canvas.addEventListener("pointerup", onPointerUp);
+          canvas.addEventListener("pointercancel", onPointerUp);
+          canvas.addEventListener("lostpointercapture", onPointerUp);
+        } else {
+          canvas.addEventListener("touchstart", onPointerDown, { passive: false });
+          window.addEventListener("touchmove", onPointerMove, { passive: false });
+          window.addEventListener("touchend", onPointerUp);
+          window.addEventListener("touchcancel", onPointerUp);
+          canvas.addEventListener("mousedown", onPointerDown);
+          window.addEventListener("mousemove", onPointerMove);
+          window.addEventListener("mouseup", onPointerUp);
+        }
         window.addEventListener("keydown", onKeyDown);
         rafId = requestAnimationFrame(loop);
       },
       destroy() {
         cancelAnimationFrame(rafId);
         window.removeEventListener("resize", resize);
-        canvas.removeEventListener("touchstart", onPointerDown);
-        window.removeEventListener("touchmove", onPointerMove);
-        window.removeEventListener("touchend", onPointerUp);
-        window.removeEventListener("touchcancel", onPointerUp);
-        canvas.removeEventListener("mousedown", onPointerDown);
-        window.removeEventListener("mousemove", onPointerMove);
-        window.removeEventListener("mouseup", onPointerUp);
+        if (window.PointerEvent) {
+          canvas.removeEventListener("pointerdown", onPointerDown);
+          canvas.removeEventListener("pointermove", onPointerMove);
+          canvas.removeEventListener("pointerup", onPointerUp);
+          canvas.removeEventListener("pointercancel", onPointerUp);
+          canvas.removeEventListener("lostpointercapture", onPointerUp);
+        } else {
+          canvas.removeEventListener("touchstart", onPointerDown);
+          window.removeEventListener("touchmove", onPointerMove);
+          window.removeEventListener("touchend", onPointerUp);
+          window.removeEventListener("touchcancel", onPointerUp);
+          canvas.removeEventListener("mousedown", onPointerDown);
+          window.removeEventListener("mousemove", onPointerMove);
+          window.removeEventListener("mouseup", onPointerUp);
+        }
         window.removeEventListener("keydown", onKeyDown);
       },
       onPeerInput(id, input) { handleAction(id, input); },

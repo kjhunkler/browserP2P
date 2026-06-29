@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.1.1";
+const APP_VERSION = "2.1.3";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -300,6 +300,7 @@ let migratingFromHostId = null;
 let keepPlayingAfterMigration = false;
 let yieldedHostForBackground = false;
 let pendingMigratedGameState = null;
+let playStarted = false;
 
 // ============================================================ DOM ===========
 const $ = (sel) => document.querySelector(sel);
@@ -340,7 +341,7 @@ function addPlayer(id, name, peerId, icon, preferredColor) {
 
 // ============================================================ NET WIRING ====
 function wireNetEvents() {
-  net.on("ready", () => {
+  net.on("ready", async () => {
     yieldedHostForBackground = false;
     players.clear();
     peerMap.clear();
@@ -359,9 +360,9 @@ function wireNetEvents() {
     migratingFromHostId = null;
     startHostLoop();
     if (selectedGame !== "free-play") {
-      if (!activeGame) startActiveGame(pendingMigratedGameState || loadSavedGameState(selectedGame)?.state || null);
+      if (!activeGame) await startActiveGame(pendingMigratedGameState || loadSavedGameState(selectedGame)?.state || null).catch(console.error);
       else if (pendingMigratedGameState) activeGame.onState?.(pendingMigratedGameState);
-      const state = activeGame?.getSnapshot?.();
+      const state = snapshotActiveGame();
       if (state) {
         saveGameState(selectedGame, state);
         net.broadcast({ t: "game-mode", game: selectedGame });
@@ -441,7 +442,8 @@ function handleHostMsg(peerId, msg) {
     net.sendTo(peerId, { t: "history", chatLog });
     net.sendTo(peerId, { t: "drawing", strokes: drawingStrokes });
     net.sendTo(peerId, { t: "game-mode", game: selectedGame });
-    if (activeGame?.getSnapshot) net.sendTo(peerId, { t: "game-state", game: selectedGame, state: activeGame.getSnapshot() });
+    queueGameStateForPeer(peerId);
+    if (playStarted || screens.play.classList.contains("active")) net.sendTo(peerId, { t: "play" });
     net.sendTo(peerId, { t: "video-list", live: liveVideoList() });
     pushSys(p.name + " joined");
     net.broadcast({ t: "sys", text: p.name + " joined" });
@@ -460,6 +462,9 @@ function handleHostMsg(peerId, msg) {
 
   } else if (msg.t === "game-mode") {
     setGameMode(msg.game, true, undefined, true).catch(console.error);
+
+  } else if (msg.t === "play") {
+    startPlaying(true);
 
   } else if (msg.t === "profile") {
     const id = peerMap.get(peerId);
@@ -569,6 +574,9 @@ function handleClientMsg(msg) {
 
   } else if (msg.t === "game-state") {
     handleGameState(msg.game, msg.state);
+
+  } else if (msg.t === "play") {
+    startPlaying(false);
 
   } else if (msg.t === "chat") {
     chatLog.push({ fromId: msg.fromId, text: msg.text, ts: msg.ts });
@@ -888,6 +896,30 @@ function saveGameState(game, state) {
   try { localStorage.setItem(gameSaveKey(game), JSON.stringify({ savedAt: Date.now(), state })); } catch {}
 }
 
+const gameSaveTimers = new Map();
+const GAME_SAVE_DEBOUNCE_MS = 2500;
+
+function snapshotActiveGame() {
+  return activeGame?.getSnapshot?.() || null;
+}
+
+function saveActiveGameStateNow() {
+  const state = snapshotActiveGame();
+  if (state) saveGameState(selectedGame, state);
+  return state;
+}
+
+function scheduleActiveGameSave() {
+  if (!activeGame || selectedGame === "free-play") return;
+  const game = selectedGame;
+  clearTimeout(gameSaveTimers.get(game));
+  gameSaveTimers.set(game, setTimeout(() => {
+    if (selectedGame !== game || !activeGame) return;
+    const state = snapshotActiveGame();
+    if (state) saveGameState(game, state);
+  }, GAME_SAVE_DEBOUNCE_MS));
+}
+
 function clearSavedGameState(game) {
   if (!game || game === "free-play") return;
   try { localStorage.removeItem(gameSaveKey(game)); } catch {}
@@ -927,6 +959,8 @@ async function setGameMode(game, broadcast = true, restoredState = undefined, pr
 
 let activeGame = null;
 let selectedGame = "";
+let gameModeToken = 0;
+const pendingGameStates = new Map();
 
 function gameHostApi() {
   return {
@@ -941,7 +975,7 @@ function gameHostApi() {
     },
     broadcastState: (state) => {
       if (!activeGame || selectedGame === "free-play" || !net.isHost) return;
-      saveGameState(selectedGame, activeGame.getSnapshot?.() || state);
+      scheduleActiveGameSave();
       net.broadcast({ t: "game-state", game: selectedGame, state });
     },
   };
@@ -981,12 +1015,12 @@ function drawGameMessage(text) {
   ctx.fillText(text, rect.width / 2, rect.height / 2);
 }
 
-async function startActiveGame(initialState = null) {
+async function startActiveGame(initialState = null, token = gameModeToken) {
   if (selectedGame === "free-play") return;
   drawGameMessage(`Loading ${gameName(selectedGame)}…`);
   const gameId = selectedGame;
   const loaded = await loadGameScript(gameId);
-  if (selectedGame !== gameId) return;
+  if (selectedGame !== gameId || token !== gameModeToken) return;
   const game = window.BP2PGames?.[gameId];
   if (!loaded || !game?.create) {
     drawGameMessage(`${gameName(gameId)} could not load.`);
@@ -994,7 +1028,13 @@ async function startActiveGame(initialState = null) {
   }
   activeGame = game.create(gameHostApi(), initialState);
   activeGame.start?.();
-  if (initialState) activeGame.onState?.(initialState);
+  const pendingState = pendingGameStates.get(gameId);
+  if (pendingState) {
+    pendingGameStates.delete(gameId);
+    activeGame.onState?.(pendingState);
+  } else if (initialState) {
+    activeGame.onState?.(initialState);
+  }
   if (net.isHost) {
     const state = activeGame.getSnapshot?.();
     if (state) {
@@ -1005,8 +1045,7 @@ async function startActiveGame(initialState = null) {
 }
 
 function stopActiveGame() {
-  const state = activeGame?.getSnapshot?.();
-  if (state) saveGameState(selectedGame, state);
+  saveActiveGameStateNow();
   activeGame?.destroy?.();
   activeGame = null;
 }
@@ -1017,13 +1056,28 @@ function handleGameInput(id, game, input) {
 }
 
 function handleGameState(game, state) {
-  if (game !== selectedGame || !activeGame) return;
+  if (game !== selectedGame || !activeGame) {
+    if (game) pendingGameStates.set(game, state);
+    return;
+  }
   activeGame.onState?.(state);
-  saveGameState(game, activeGame.getSnapshot?.() || state);
+  scheduleActiveGameSave();
 }
 
 function notifyActiveGamePlayersChanged() {
   activeGame?.onPlayerList?.();
+}
+
+function queueGameStateForPeer(peerId) {
+  if (selectedGame === "free-play" || !activeGame) return;
+  let attempts = 0;
+  const sendWhenReady = () => {
+    if (selectedGame === "free-play" || !activeGame) return;
+    const state = snapshotActiveGame();
+    if (state) net.sendTo(peerId, { t: "game-state", game: selectedGame, state });
+    else if (attempts++ < 10) setTimeout(sendWhenReady, 250);
+  };
+  setTimeout(sendWhenReady, 0);
 }
 
 function pushSys(text) {
@@ -1589,6 +1643,7 @@ function leaveLobby() {
   autoMode = false;
   keepPlayingAfterMigration = false;
   yieldedHostForBackground = false;
+  playStarted = false;
   stopHostLoop();
   stopLiveVoice();
   stopCamera();
@@ -1608,6 +1663,12 @@ function leaveLobby() {
   $("#btn-auto").disabled = false;
   $("#auto-status").textContent = "Finds or starts the game on your Wi-Fi.";
   setStatus("");
+}
+
+function startPlaying(broadcast = true) {
+  playStarted = true;
+  show("play");
+  if (broadcast && net.isHost) net.broadcast({ t: "play" });
 }
 
 function enterDefaultLobby() {
@@ -1915,6 +1976,7 @@ $("#btn-host").addEventListener("click", () => {
   lobbyListKey = "";
   lastState = [];
   lastHostOrder = [];
+  playStarted = false;
   setStatus("");
   net.host();
 });
@@ -1926,10 +1988,11 @@ $("#btn-join").addEventListener("click", () => {
   net.destroy();
   net = new PeerNet();
   wireNetEvents();
+  playStarted = false;
   joinCode(code);
 });
 
-$("#btn-start").addEventListener("click", () => show("play"));
+$("#btn-start").addEventListener("click", () => startPlaying(true));
 $("#game-select")?.addEventListener("change", (e) => setGameMode(e.target.value).catch(console.error));
 $("#btn-draw")?.addEventListener("click", () => setDrawMode(!drawMode));
 $("#btn-draw-pen")?.addEventListener("click", () => setDrawTool("pen"));
