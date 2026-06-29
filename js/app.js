@@ -4,9 +4,11 @@
  * Protocol:
  *   client -> host : { t:'hello', id, name, icon, preferredColor }   on connect
  *                    { t:'input', x, y }                             on drag
+ *                    { t:'game-input', game, input }                 active game input
  *                    { t:'profile', name, icon, preferredColor }     on profile change
  *                    { t:'chat', text }                              on send
  *   host -> all   : { t:'state', players, hostOrder }               every tick
+ *                    { t:'game-state', game, state }                 active game state
  *                    { t:'profile', id, name, color, icon }         on profile update
  *                    { t:'chat', fromId, text, ts }                 on chat
  *                    { t:'sys', text }                              join/leave notices
@@ -41,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.0.9";
+const APP_VERSION = "2.1.0";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -297,6 +299,7 @@ let hasLeftLobby = false;
 let migratingFromHostId = null;
 let keepPlayingAfterMigration = false;
 let yieldedHostForBackground = false;
+let pendingMigratedGameState = null;
 
 // ============================================================ DOM ===========
 const $ = (sel) => document.querySelector(sel);
@@ -355,6 +358,17 @@ function wireNetEvents() {
     }
     migratingFromHostId = null;
     startHostLoop();
+    if (selectedGame !== "free-play") {
+      if (!activeGame) startActiveGame(pendingMigratedGameState || loadSavedGameState(selectedGame)?.state || null);
+      else if (pendingMigratedGameState) activeGame.onState?.(pendingMigratedGameState);
+      const state = activeGame?.getSnapshot?.();
+      if (state) {
+        saveGameState(selectedGame, state);
+        net.broadcast({ t: "game-mode", game: selectedGame });
+        net.broadcast({ t: "game-state", game: selectedGame, state });
+      }
+    }
+    pendingMigratedGameState = null;
     announceCameraOn();
     renderLobby();
     show(keepPlayingAfterMigration ? "play" : "lobby");
@@ -393,6 +407,7 @@ function wireNetEvents() {
     if (!autoMode) { alert("The host left. Game over."); location.reload(); return; }
     keepPlayingAfterMigration = screens.play.classList.contains("active");
     migratingFromHostId = lastHostOrder[0] || null;
+    pendingMigratedGameState = activeGame?.getSnapshot?.() || loadSavedGameState(selectedGame)?.state || null;
     const remainingOrder = migratingFromHostId ? lastHostOrder.filter((id) => id !== migratingFromHostId) : [MY_ID];
     const myIndex = remainingOrder.indexOf(MY_ID);
     if (myIndex < 0) return;
@@ -425,16 +440,26 @@ function handleHostMsg(peerId, msg) {
     net.sendTo(peerId, { t: "welcome", color: p.color });
     net.sendTo(peerId, { t: "history", chatLog });
     net.sendTo(peerId, { t: "drawing", strokes: drawingStrokes });
+    net.sendTo(peerId, { t: "game-mode", game: selectedGame });
+    if (activeGame?.getSnapshot) net.sendTo(peerId, { t: "game-state", game: selectedGame, state: activeGame.getSnapshot() });
     net.sendTo(peerId, { t: "video-list", live: liveVideoList() });
     pushSys(p.name + " joined");
     net.broadcast({ t: "sys", text: p.name + " joined" });
     if (p.id !== MY_ID) notifyPlayerJoined(p.name);
     renderLobby();
+    notifyActiveGamePlayersChanged();
 
   } else if (msg.t === "input") {
     const id = peerMap.get(peerId);
     const p  = id && players.get(id);
     if (p) { p.x = clamp01(msg.x); p.y = clamp01(msg.y); }
+
+  } else if (msg.t === "game-input") {
+    const id = peerMap.get(peerId);
+    if (id) handleGameInput(id, msg.game, msg.input);
+
+  } else if (msg.t === "game-mode") {
+    setGameMode(msg.game, true, undefined, true);
 
   } else if (msg.t === "profile") {
     const id = peerMap.get(peerId);
@@ -539,6 +564,12 @@ function handleClientMsg(msg) {
   } else if (msg.t === "drawing") {
     replaceDrawing(msg.strokes);
 
+  } else if (msg.t === "game-mode") {
+    setGameMode(msg.game, false);
+
+  } else if (msg.t === "game-state") {
+    handleGameState(msg.game, msg.state);
+
   } else if (msg.t === "chat") {
     chatLog.push({ fromId: msg.fromId, text: msg.text, ts: msg.ts });
     saveChatLog();
@@ -617,6 +648,8 @@ function yieldHostForBackground() {
   if (net.peerCount() === 0) return;
   yieldedHostForBackground = true;
   keepPlayingAfterMigration = screens.play.classList.contains("active");
+  const state = activeGame?.getSnapshot?.();
+  if (state) saveGameState(selectedGame, state);
   stopHostLoop();
   net.destroy();
   show(keepPlayingAfterMigration ? "play" : "lobby");
@@ -683,6 +716,11 @@ let drawSize = Number(localStorage.getItem(DRAW_SIZE_KEY) || 4);
 let drawing = false;
 let currentStroke = null;
 const drawingRedoStack = [];
+
+// ============================================================ CANVAS ========
+const canvas = $("#stage");
+const ctx    = canvas.getContext("2d");
+let dragging = false;
 
 function addDrawingStroke(stroke, broadcast = true) {
   if (!stroke || !stroke.points || stroke.points.length < 2) return;
@@ -834,10 +872,117 @@ function syncDrawToolUi() {
   if (size && Number(size.value) !== drawSize) size.value = String(drawSize);
 }
 
-function setGameMode(game) {
-  selectedGame = game || "free-play";
+const GAME_SAVE_PREFIX = "bp2p-game-state-";
+
+function gameSaveKey(game) {
+  return GAME_SAVE_PREFIX + game;
+}
+
+function loadSavedGameState(game) {
+  if (!game || game === "free-play") return null;
+  try { return JSON.parse(localStorage.getItem(gameSaveKey(game)) || "null"); } catch { return null; }
+}
+
+function saveGameState(game, state) {
+  if (!game || game === "free-play" || !state) return;
+  try { localStorage.setItem(gameSaveKey(game), JSON.stringify({ savedAt: Date.now(), state })); } catch {}
+}
+
+function clearSavedGameState(game) {
+  if (!game || game === "free-play") return;
+  try { localStorage.removeItem(gameSaveKey(game)); } catch {}
+}
+
+function promptForSavedGame(game) {
+  const saved = loadSavedGameState(game);
+  if (!saved?.state) return null;
+  const when = saved.savedAt ? new Date(saved.savedAt).toLocaleString() : "a previous session";
+  if (confirm(`Continue saved ${gameName(game)} from ${when}?`)) return saved.state;
+  clearSavedGameState(game);
+  return null;
+}
+
+function gameName(game) {
+  return window.BP2PGames?.[game]?.name || game;
+}
+
+function setGameMode(game, broadcast = true, restoredState = undefined, promptHost = true) {
+  const nextGame = game || "free-play";
+  if (selectedGame === nextGame) return;
+  stopActiveGame();
+  selectedGame = nextGame;
+  const select = $("#game-select");
+  if (select && select.value !== selectedGame) select.value = selectedGame;
   if (selectedGame !== "free-play") setDrawMode(false);
   else setDrawMode(drawMode);
+  const initialState = restoredState !== undefined
+    ? restoredState
+    : (promptHost && net.isHost ? promptForSavedGame(selectedGame) : null);
+  startActiveGame(initialState);
+  if (broadcast) {
+    if (net.isHost) net.broadcast({ t: "game-mode", game: selectedGame });
+    else net.send({ t: "game-mode", game: selectedGame });
+  }
+}
+
+let activeGame = null;
+let selectedGame = "";
+
+function gameHostApi() {
+  return {
+    canvas,
+    myId: MY_ID,
+    isHost: () => net.isHost,
+    getPlayers: () => net.isHost ? [...players.values()] : lastState,
+    getProfile: (id) => profiles.get(id),
+    sendInput: (input) => {
+      if (!activeGame || selectedGame === "free-play") return;
+      net.send({ t: "game-input", game: selectedGame, input });
+    },
+    broadcastState: (state) => {
+      if (!activeGame || selectedGame === "free-play" || !net.isHost) return;
+      saveGameState(selectedGame, activeGame.getSnapshot?.() || state);
+      net.broadcast({ t: "game-state", game: selectedGame, state });
+    },
+  };
+}
+
+function startActiveGame(initialState = null) {
+  if (selectedGame === "free-play") return;
+  const game = window.BP2PGames?.[selectedGame];
+  if (!game?.create) return;
+  activeGame = game.create(gameHostApi(), initialState);
+  activeGame.start?.();
+  if (initialState) activeGame.onState?.(initialState);
+  if (net.isHost) {
+    const state = activeGame.getSnapshot?.();
+    if (state) {
+      saveGameState(selectedGame, state);
+      net.broadcast({ t: "game-state", game: selectedGame, state });
+    }
+  }
+}
+
+function stopActiveGame() {
+  const state = activeGame?.getSnapshot?.();
+  if (state) saveGameState(selectedGame, state);
+  activeGame?.destroy?.();
+  activeGame = null;
+}
+
+function handleGameInput(id, game, input) {
+  if (!net.isHost || game !== selectedGame || !activeGame) return;
+  activeGame.onPeerInput?.(id, input);
+}
+
+function handleGameState(game, state) {
+  if (game !== selectedGame || !activeGame) return;
+  activeGame.onState?.(state);
+  saveGameState(game, activeGame.getSnapshot?.() || state);
+}
+
+function notifyActiveGamePlayersChanged() {
+  activeGame?.onPlayerList?.();
 }
 
 function pushSys(text) {
@@ -1563,11 +1708,6 @@ function setStatus(text) {
   if (s) s.textContent = text;
 }
 
-// ============================================================ CANVAS ========
-const canvas = $("#stage");
-const ctx    = canvas.getContext("2d");
-let dragging = false;
-
 function syncCanvasSize() {
   const rect = canvas.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return rect;
@@ -1597,6 +1737,7 @@ function pointerPressure(e) {
 }
 
 function onDown(e) {
+  if (selectedGame !== "free-play") return;
   // Don't drag when a sheet or chat panel is open.
   if (profileOpen || chatOpen) return;
   if (drawMode) {
@@ -1623,6 +1764,7 @@ function onDown(e) {
   onMove(e);
 }
 function onMove(e) {
+  if (selectedGame !== "free-play") return;
   if (drawing && currentStroke) {
     e.preventDefault();
     const point = pointerToNorm(e);
@@ -1656,6 +1798,10 @@ window.addEventListener("touchend",   onUp);
 window.addEventListener("touchcancel", onUp);
 
 function render() {
+  if (selectedGame !== "free-play") {
+    requestAnimationFrame(render);
+    return;
+  }
   const rect = syncCanvasSize();
   ctx.clearRect(0, 0, rect.width, rect.height);
   renderDrawing(rect);
