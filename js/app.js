@@ -177,14 +177,23 @@ const ctx = canvas.getContext("2d");
 let myTarget = { x: 0.5, y: 0.5 };
 let dragging = false;
 
-function resizeCanvas() {
-  const dpr = window.devicePixelRatio || 1;
+// Keep the canvas backing store matched to its on-screen size. Called every
+// frame so it self-corrects no matter when the play screen becomes visible
+// (host pressing Start, a client connecting) and on rotate/resize. Returns the
+// element's CSS-pixel size for use in drawing/input math.
+function syncCanvasSize() {
   const rect = canvas.getBoundingClientRect();
-  canvas.width = rect.width * dpr;
-  canvas.height = rect.height * dpr;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (rect.width === 0 || rect.height === 0) return rect; // not visible yet
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(rect.width * dpr);
+  const h = Math.round(rect.height * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  return rect;
 }
-window.addEventListener("resize", resizeCanvas);
 
 function pointerToNorm(e) {
   const rect = canvas.getBoundingClientRect();
@@ -216,7 +225,7 @@ canvas.addEventListener("touchmove", onMove, { passive: false });
 window.addEventListener("touchend", onUp);
 
 function render() {
-  const rect = canvas.getBoundingClientRect();
+  const rect = syncCanvasSize();
   ctx.clearRect(0, 0, rect.width, rect.height);
   for (const p of lastState) {
     const x = p.x * rect.width;
@@ -252,8 +261,7 @@ $("#btn-join").addEventListener("click", () => {
 });
 
 $("#btn-start").addEventListener("click", () => {
-  resizeCanvas();
-  show("play");
+  show("play"); // render loop sizes the canvas once it's visible
 });
 
 // Auto-join if opened from a QR link (?join=CODE).
