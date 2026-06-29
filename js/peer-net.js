@@ -66,17 +66,7 @@ class PeerNet {
         this._emit("ready");
       });
 
-      peer.on("connection", (conn) => {
-        conn.on("open", () => {
-          this.conns.set(conn.peer, conn);
-          this._emit("peer-join", conn.peer);
-        });
-        conn.on("data", (data) => this._emit("message", { from: conn.peer, data }));
-        conn.on("close", () => {
-          this.conns.delete(conn.peer);
-          this._emit("peer-leave", conn.peer);
-        });
-      });
+      this._acceptConnections(peer);
 
       peer.on("error", (err) => {
         // Code collision on the public broker — pick another and retry.
@@ -89,6 +79,97 @@ class PeerNet {
       });
     };
     tryCode(5);
+  }
+
+  // Wire a host peer to track incoming client connections. Shared by host()
+  // and the auto() election path.
+  _acceptConnections(peer) {
+    peer.on("connection", (conn) => {
+      conn.on("open", () => {
+        this.conns.set(conn.peer, conn);
+        this._emit("peer-join", conn.peer);
+      });
+      conn.on("data", (data) => this._emit("message", { from: conn.peer, data }));
+      conn.on("close", () => {
+        this.conns.delete(conn.peer);
+        this._emit("peer-leave", conn.peer);
+      });
+    });
+  }
+
+  /* ----- AUTO (one game per network) ----- */
+  // Open the app and "just join": try to reach the single well-known host on
+  // this channel; if nobody is hosting, become the host. First device in wins
+  // the host role, everyone after auto-joins it. No codes, no QR.
+  //
+  // NOTE: the public PeerJS broker is global, not per-LAN, so this fixed id is
+  // shared with anyone running the app at the same moment. Pass a `channel`
+  // string to scope it to your group if you ever collide.
+  auto(channel) {
+    this._autoId = PREFIX + "auto" + (channel ? "-" + channel : "");
+    this.code = this._autoId.slice(PREFIX.length);
+    this._tryJoinThenHost();
+  }
+
+  _tryJoinThenHost() {
+    this.isHost = false;
+    const peer = new Peer({ debug: 1 }); // random id for the join attempt
+    this.peer = peer;
+    let settled = false;
+
+    peer.on("open", () => {
+      const conn = peer.connect(this._autoId, { reliable: true });
+      this.hostConn = conn;
+
+      // Safety net: if the host neither answers nor reports unavailable, assume
+      // there isn't one and take the host role ourselves.
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        peer.destroy();
+        this._becomeHost();
+      }, 2500);
+
+      conn.on("open", () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this._emit("connected");
+      });
+      conn.on("data", (data) => this._emit("message", { from: "host", data }));
+      conn.on("close", () => this._emit("host-closed"));
+    });
+
+    peer.on("error", (err) => {
+      // No host registered under the well-known id yet — become it.
+      if (err.type === "peer-unavailable" && !settled) {
+        settled = true;
+        peer.destroy();
+        this._becomeHost();
+      } else if (!settled) {
+        this._emit("error", err);
+      }
+    });
+  }
+
+  _becomeHost() {
+    this.isHost = true;
+    const peer = new Peer(this._autoId, { debug: 1 });
+    this.peer = peer;
+
+    peer.on("open", () => this._emit("ready"));
+    this._acceptConnections(peer);
+
+    peer.on("error", (err) => {
+      // Race: another device claimed the host id a moment before us. Step back
+      // and join them instead.
+      if (err.type === "unavailable-id") {
+        peer.destroy();
+        this._tryJoinThenHost();
+      } else {
+        this._emit("error", err);
+      }
+    });
   }
 
   /* ----- CLIENT ----- */

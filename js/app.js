@@ -35,6 +35,12 @@ const MY_NAME = "Player " + MY_ID.slice(2, 5).toUpperCase();
 
 const net = new PeerNet();
 
+// Channel scopes the well-known auto-join host id. Empty = the global default,
+// which is fine when you only run one game per network. Set it (e.g. a family
+// name) only if you ever need to avoid colliding with other users worldwide.
+const AUTO_CHANNEL = "";
+let autoMode = false;
+
 // ---- DOM ----
 const $ = (sel) => document.querySelector(sel);
 const screens = {
@@ -72,11 +78,17 @@ function addPlayer(id, name, peerId) {
 
 // ============================================================ NET WIRING ====
 net.on("ready", () => {
-  // Host is registered. Seed the host's own player and show the lobby.
+  // We're the host. Seed our own player and start the authoritative loop.
   addPlayer(MY_ID, MY_NAME + " (host)", null);
-  renderLobby();
-  show("lobby");
   startHostLoop();
+  if (autoMode) {
+    // Auto-join: no lobby ceremony — drop straight into play. Joiners appear
+    // as they connect.
+    show("play");
+  } else {
+    renderLobby();
+    show("lobby");
+  }
 });
 
 net.on("peer-join", (peerId) => renderLobby());
@@ -248,6 +260,13 @@ function render() {
 }
 
 // ============================================================ MENU ACTIONS ==
+$("#btn-auto").addEventListener("click", () => {
+  autoMode = true;
+  document.querySelector("#btn-auto").disabled = true;
+  document.querySelector("#auto-status").textContent = "Looking for a game on your Wi-Fi…";
+  net.auto(AUTO_CHANNEL);
+});
+
 $("#btn-host").addEventListener("click", () => {
   setStatus("");
   net.host();

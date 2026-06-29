@@ -49,6 +49,7 @@ html, body {
 }
 .btn:active { transform: scale(0.96); }
 .btn-primary { background: var(--accent); color: #06210f; }
+.btn-big { font-size: 1.4rem; padding: 18px 48px; border-radius: 18px; }
 
 .divider {
   display: flex;

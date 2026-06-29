@@ -17,8 +17,16 @@ A browser tab can't be a TCP/WebSocket server, so instead of a server we use
   [PeerJS](https://peerjs.com/) and its free public broker for that. **Only the
   handshake touches the internet** — the gameplay is local. (HTTPS is fine here;
   the old `ws://` mixed-content problem doesn't apply to WebRTC.)
-- **Joining:** the host shows a 4-character code and a QR. Scanning the QR opens
-  the page with `?join=CODE` pre-filled.
+- **Joining:** tap **Play** and the app auto-joins — it tries to reach the one
+  well-known host on your network and, if nobody is hosting yet, *becomes* the
+  host. First device in is the host; everyone after joins automatically. No code,
+  no QR. (A 4-char code / QR flow is kept under "advanced" for when you want more
+  than one game at once.)
+
+  > Caveat: the public PeerJS broker is global, not per-LAN, so the well-known
+  > auto-join id is shared with anyone running the app at the same instant. Fine
+  > for personal use. If you ever collide, set `AUTO_CHANNEL` in `js/app.js` to a
+  > private string to scope it to your group.
 
 ```
   [ host phone ]              broker (internet, handshake only)
