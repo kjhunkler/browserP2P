@@ -210,6 +210,13 @@ function handleHostMsg(peerId, msg) {
     saveChatLog();
     renderChat();
     net.broadcast({ t: "chat", fromId: id, text: msg.text, ts: entry.ts });
+
+  } else if (msg.t === "voice") {
+    const id = peerMap.get(peerId);
+    if (!id) return;
+    msg.fromId = id; // use server-verified id
+    receiveVoiceMessage(msg);
+    net.broadcast({ t: "voice", fromId: id, msgId: msg.msgId, mimeType: msg.mimeType, audioB64: msg.audioB64, duration: msg.duration, ts: msg.ts });
   }
 }
 
@@ -250,6 +257,9 @@ function handleClientMsg(msg) {
     saveChatLog();
     renderChat();
     if (!chatOpen) showChatBadge();
+
+  } else if (msg.t === "voice") {
+    receiveVoiceMessage(msg);
 
   } else if (msg.t === "sys") {
     pushSys(msg.text);
@@ -309,20 +319,49 @@ function renderChat() {
       log.appendChild(el);
       continue;
     }
-    const pf = profiles.get(entry.fromId) || { name: "?", color: "#888", icon: "👤" };
+    const pf   = profiles.get(entry.fromId) || { name: "?", color: "#888", icon: "👤" };
     const isMe = entry.fromId === MY_ID;
-    const el = document.createElement("div");
+    const el   = document.createElement("div");
     el.className = "chat-msg" + (isMe ? " mine" : "");
-    el.innerHTML = `
-      <div class="msg-avatar" style="background:${pf.color}">${pf.icon}</div>
-      <div class="msg-body">
-        <div class="msg-name" style="color:${pf.color}">${esc(pf.name)}</div>
-        <div class="msg-bubble">${esc(entry.text)}</div>
-      </div>`;
+
+    if (entry.voice) {
+      const hasAudio = voiceCache.has(entry.msgId);
+      const dur      = fmtDur(entry.duration || 0);
+      el.innerHTML = `
+        <div class="msg-avatar" style="background:${pf.color}">${pf.icon}</div>
+        <div class="msg-body">
+          <div class="msg-name" style="color:${pf.color}">${esc(pf.name)}</div>
+          <div class="msg-bubble voice-bubble">
+            <span class="voice-icon">🎤</span>
+            <span class="voice-dur">${dur}</span>
+            <button class="play-btn${hasAudio ? "" : " expired"}"
+                    data-msg-id="${entry.msgId}"
+                    ${hasAudio ? "" : "disabled"}
+                    title="${hasAudio ? "Replay" : "Expired"}">
+              ${hasAudio ? "▶" : "✕"}
+            </button>
+          </div>
+        </div>`;
+    } else {
+      el.innerHTML = `
+        <div class="msg-avatar" style="background:${pf.color}">${pf.icon}</div>
+        <div class="msg-body">
+          <div class="msg-name" style="color:${pf.color}">${esc(pf.name)}</div>
+          <div class="msg-bubble">${esc(entry.text)}</div>
+        </div>`;
+    }
     log.appendChild(el);
   }
   if (wasAtBottom) log.scrollTop = log.scrollHeight;
 }
+
+// Replay clicks delegated from the log container.
+$("#chat-log").addEventListener("click", (e) => {
+  const btn = e.target.closest(".play-btn:not(.expired)");
+  if (!btn) return;
+  const url = voiceCache.get(btn.dataset.msgId);
+  if (url) new Audio(url).play().catch(() => {});
+});
 
 function showChatBadge() {
   unreadCount++;
@@ -345,6 +384,7 @@ function openChat() {
 }
 
 function closeChat() {
+  stopRecording(); // safety — cancel any in-progress recording
   chatOpen = false;
   $("#panel-chat").classList.remove("open");
 }
@@ -364,6 +404,146 @@ function sendChat() {
     net.send({ t: "chat", text });
   }
 }
+
+// ============================================================ VOICE =========
+const voiceCache = new Map(); // msgId -> blob URL (ephemeral — cleared on reload)
+const MAX_RECORD_MS = 30_000;
+let mediaRecorder  = null;
+let recChunks      = [];
+let recStart       = 0;
+let recTimerStop   = null;
+let recTickInterval = null;
+
+function fmtDur(s) {
+  const m = Math.floor(s / 60);
+  return `${m}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+}
+
+function bestMimeType() {
+  const candidates = [
+    "audio/webm;codecs=opus", "audio/webm",
+    "audio/ogg;codecs=opus",  "audio/mp4",
+  ];
+  for (const t of candidates) {
+    if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return "";
+}
+
+async function startRecording() {
+  if (mediaRecorder) return;
+  const label = $("#ptt-label");
+  try {
+    const stream   = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    const mimeType = bestMimeType();
+    mediaRecorder  = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+    recChunks      = [];
+    recStart       = Date.now();
+
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recChunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const duration = (Date.now() - recStart) / 1000;
+      if (duration >= 0.5) {
+        const blob = new Blob(recChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+        sendVoiceMessage(blob, duration);
+      }
+      mediaRecorder = null;
+      setPttIdle();
+    };
+
+    mediaRecorder.start(100);
+    setPttRecording();
+    recTimerStop = setTimeout(stopRecording, MAX_RECORD_MS);
+  } catch {
+    mediaRecorder = null;
+    setPttIdle();
+    if (label) label.textContent = "Mic unavailable";
+    setTimeout(() => { if (label) label.textContent = "Hold to talk"; }, 2500);
+  }
+}
+
+function stopRecording() {
+  clearTimeout(recTimerStop);
+  clearInterval(recTickInterval);
+  if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+}
+
+function setPttRecording() {
+  const btn   = $("#btn-ptt");
+  const label = $("#ptt-label");
+  btn.classList.add("recording");
+  recTickInterval = setInterval(() => {
+    if (label) label.textContent = "Recording " + fmtDur((Date.now() - recStart) / 1000);
+  }, 200);
+}
+
+function setPttIdle() {
+  clearInterval(recTickInterval);
+  const btn   = $("#btn-ptt");
+  const label = $("#ptt-label");
+  btn.classList.remove("recording");
+  if (label) label.textContent = "Hold to talk";
+}
+
+async function sendVoiceMessage(blob, duration) {
+  // Convert to base64 for transport over PeerJS DataChannel.
+  const ab     = await blob.arrayBuffer();
+  const bytes  = new Uint8Array(ab);
+  let binary   = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  const audioB64 = btoa(binary);
+
+  const msgId = MY_ID + "-" + Date.now();
+  const ts    = Date.now();
+  const mimeType = blob.type;
+
+  // Store locally so the sender can replay their own message.
+  voiceCache.set(msgId, URL.createObjectURL(blob));
+
+  const entry = { fromId: MY_ID, voice: true, msgId, duration, ts };
+  chatLog.push(entry);
+  saveChatLog();
+  renderChat();
+
+  const msg = { t: "voice", fromId: MY_ID, msgId, mimeType, audioB64, duration, ts };
+  if (net.isHost) {
+    net.broadcast(msg); // host sends directly to all clients
+  } else {
+    net.send(msg);      // client sends to host; host rebroadcasts
+  }
+}
+
+function receiveVoiceMessage(msg) {
+  const { fromId, msgId, mimeType, audioB64, duration, ts } = msg;
+  // Sender already added their own entry; skip the echo.
+  if (chatLog.some((e) => e.voice && e.msgId === msgId)) return;
+
+  // Decode base64 → blob → URL.
+  const binary = atob(audioB64);
+  const bytes  = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const blob = new Blob([bytes], { type: mimeType || "audio/webm" });
+  const url  = URL.createObjectURL(blob);
+  voiceCache.set(msgId, url);
+
+  chatLog.push({ fromId, voice: true, msgId, duration, ts });
+  saveChatLog();
+  renderChat();
+  if (!chatOpen) showChatBadge();
+
+  // Auto-play (best-effort — may be blocked by browser autoplay policy).
+  new Audio(url).play().catch(() => {});
+}
+
+// PTT button events.
+const pttBtn = $("#btn-ptt");
+pttBtn.addEventListener("mousedown",   (e) => { e.preventDefault(); startRecording(); });
+pttBtn.addEventListener("mouseup",     stopRecording);
+pttBtn.addEventListener("mouseleave",  stopRecording);
+pttBtn.addEventListener("touchstart",  (e) => { e.preventDefault(); startRecording(); }, { passive: false });
+pttBtn.addEventListener("touchend",    (e) => { e.preventDefault(); stopRecording(); },  { passive: false });
+pttBtn.addEventListener("touchcancel", stopRecording);
 
 // ============================================================ PROFILE UI ====
 let profileOpen = false;
