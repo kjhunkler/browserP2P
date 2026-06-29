@@ -41,7 +41,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "1.9.5";
+const APP_VERSION = "2.0.0";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -304,6 +304,7 @@ function show(name) {
 // ============================================================ HOST STATE ====
 const players  = new Map();   // id -> { id, name, color, icon, x, y }
 const peerMap  = new Map();   // transport peerId -> clientId
+const liveVideoPeers = new Map(); // clientId -> peerId
 let usedColors = new Set();
 
 function pickColor() {
@@ -363,6 +364,8 @@ function wireNetEvents() {
       if (p) usedColors.delete(p.color);
       players.delete(id);
       peerMap.delete(peerId);
+      liveVideoPeers.delete(id);
+      removeVideoTile(id);
       markSilent(id);
       pushSys(name + " left");
       net.broadcast({ t: "sys", text: name + " left" });
@@ -398,6 +401,9 @@ function wireNetEvents() {
     if (net.isHost) handleHostMsg(from, data);
     else handleClientMsg(data);
   });
+
+  net.on("media-call", handleMediaCall);
+  net.on("media-close", removeVideoTile);
 }
 wireNetEvents();
 
@@ -408,6 +414,7 @@ function handleHostMsg(peerId, msg) {
     net.sendTo(peerId, { t: "welcome", color: p.color });
     net.sendTo(peerId, { t: "history", chatLog });
     net.sendTo(peerId, { t: "drawing", strokes: drawingStrokes });
+    net.sendTo(peerId, { t: "video-list", live: liveVideoList() });
     pushSys(p.name + " joined");
     net.broadcast({ t: "sys", text: p.name + " joined" });
     if (p.id !== MY_ID) notifyPlayerJoined(p.name);
@@ -451,6 +458,21 @@ function handleHostMsg(peerId, msg) {
   } else if (msg.t === "draw-clear") {
     clearDrawing(false);
     net.broadcast({ t: "draw-clear" });
+
+  } else if (msg.t === "video-on") {
+    const id = peerMap.get(peerId);
+    if (!id) return;
+    remoteVideoIds.set(peerId, id);
+    liveVideoPeers.set(id, peerId);
+    net.broadcast({ t: "video-on", fromId: id, peerId });
+    callPeerForVideo(peerId);
+
+  } else if (msg.t === "video-off") {
+    const id = peerMap.get(peerId);
+    if (!id) return;
+    liveVideoPeers.delete(id);
+    removeVideoTile(id);
+    net.broadcast({ t: "video-off", fromId: id });
 
   } else if (msg.t === "audio-start" || msg.t === "audio-stop" || msg.t === "audio-pcm") {
     const id = peerMap.get(peerId);
@@ -509,6 +531,24 @@ function handleClientMsg(msg) {
 
   } else if (msg.t === "draw-clear") {
     clearDrawing(false);
+
+  } else if (msg.t === "video-on") {
+    if (msg.fromId !== MY_ID) {
+      remoteVideoIds.set(msg.peerId, msg.fromId);
+      callPeerForVideo(msg.peerId, msg.fromId);
+    }
+
+  } else if (msg.t === "video-off") {
+    liveVideoPeers.delete(msg.fromId);
+    removeVideoTile(msg.fromId);
+
+  } else if (msg.t === "video-list") {
+    for (const live of msg.live || []) {
+      if (live.fromId !== MY_ID) {
+        remoteVideoIds.set(live.peerId, live.fromId);
+        callPeerForVideo(live.peerId, live.fromId);
+      }
+    }
 
   } else if (msg.t === "audio-start" || msg.t === "audio-stop" || msg.t === "audio-pcm") {
     handleLiveAudio(msg);
@@ -1089,6 +1129,114 @@ function stopLiveVoice() {
   $("#btn-mic").classList.remove("recording");
 }
 
+// ============================================================ LIVE VIDEO ====
+let cameraStream = null;
+const remoteVideoIds = new Map(); // peerId -> clientId
+
+async function startCamera() {
+  if (cameraStream) return;
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: "user",
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+      },
+      audio: false,
+    });
+    addVideoTile(MY_ID, cameraStream, true);
+    $("#btn-camera").classList.add("recording");
+    announceCameraOn();
+  } catch {
+    cameraStream = null;
+    $("#btn-camera").classList.remove("recording");
+  }
+}
+
+function stopCamera() {
+  if (!cameraStream) return;
+  cameraStream.getTracks().forEach((track) => track.stop());
+  cameraStream = null;
+  removeVideoTile(MY_ID);
+  $("#btn-camera").classList.remove("recording");
+  sendVideoOff();
+}
+
+function toggleCamera() {
+  if (cameraStream) stopCamera();
+  else startCamera();
+}
+
+function announceCameraOn() {
+  if (!cameraStream) return;
+  if (net.isHost) {
+    net.broadcast({ t: "video-on", fromId: MY_ID, peerId: net.peer?.id });
+  } else {
+    net.send({ t: "video-on" });
+  }
+}
+
+function sendVideoOff() {
+  liveVideoPeers.delete(MY_ID);
+  if (net.isHost) net.broadcast({ t: "video-off", fromId: MY_ID });
+  else net.send({ t: "video-off" });
+}
+
+function liveVideoList() {
+  const live = [];
+  if (cameraStream && net.peer?.id) live.push({ fromId: MY_ID, peerId: net.peer.id });
+  for (const [fromId, peerId] of liveVideoPeers) live.push({ fromId, peerId });
+  return live;
+}
+
+function callPeerForVideo(peerId, clientId = null) {
+  if (!peerId) return;
+  const call = net.call(peerId, cameraStream || new MediaStream());
+  if (!call) return;
+  if (clientId) remoteVideoIds.set(peerId, clientId);
+  call.on("stream", (stream) => addVideoTile(remoteVideoIds.get(peerId) || clientId || peerId, stream));
+  call.on("close", () => removeVideoTile(remoteVideoIds.get(peerId) || clientId || peerId));
+}
+
+function handleMediaCall(call) {
+  if (net.isHost && peerMap.get(call.peer)) remoteVideoIds.set(call.peer, peerMap.get(call.peer));
+  if (cameraStream) call.answer(cameraStream);
+  else call.answer(new MediaStream());
+  call.on("stream", (stream) => addVideoTile(remoteVideoIds.get(call.peer) || call.peer, stream));
+  call.on("close", () => removeVideoTile(remoteVideoIds.get(call.peer) || call.peer));
+}
+
+function addVideoTile(id, stream, muted = false) {
+  if (!id || !stream) return;
+  if (stream.getVideoTracks().length === 0) return;
+  const tray = $("#video-tray");
+  let tile = document.getElementById("video-" + cssId(id));
+  if (!tile) {
+    tile = document.createElement("div");
+    tile.id = "video-" + cssId(id);
+    tile.className = "video-tile";
+    tile.innerHTML = `
+      <video playsinline autoplay></video>
+      <div class="video-label"><span class="video-name"></span><span class="live-pill">LIVE</span></div>`;
+    tray.appendChild(tile);
+  }
+  const video = tile.querySelector("video");
+  video.srcObject = stream;
+  video.muted = muted;
+  video.play().catch(() => {});
+  const pf = profiles.get(id) || { name: id === MY_ID ? profile.name : "Camera" };
+  tile.querySelector(".video-name").textContent = id === MY_ID ? "You" : pf.name;
+}
+
+function removeVideoTile(id) {
+  if (!id) return;
+  document.getElementById("video-" + cssId(id))?.remove();
+}
+
+function cssId(id) {
+  return String(id).replace(/[^a-z0-9_-]/gi, "-");
+}
+
 // HUD mic button → toggle live voice (independent from in-chat record-to-thread PTT)
 const hudMic = $("#btn-mic");
 let lastMicTouch = 0;
@@ -1106,6 +1254,12 @@ hudMic.addEventListener("touchend", (e) => {
   lastMicTouch = Date.now();
   toggleLiveVoice();
 }, { passive: false });
+
+const cameraBtn = $("#btn-camera");
+cameraBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  toggleCamera();
+});
 
 // ============================================================ PROFILE UI ====
 let profileOpen = false;
@@ -1130,9 +1284,11 @@ function leaveLobby() {
   autoMode = false;
   stopHostLoop();
   stopLiveVoice();
+  stopCamera();
   net.destroy();
   players.clear();
   peerMap.clear();
+  liveVideoPeers.clear();
   usedColors.clear();
   lobbyListKey = "";
   lastState = [];
@@ -1438,6 +1594,7 @@ $("#btn-host").addEventListener("click", () => {
   hasLeftLobby = false;
   players.clear();
   peerMap.clear();
+  liveVideoPeers.clear();
   usedColors.clear();
   lobbyListKey = "";
   lastState = [];

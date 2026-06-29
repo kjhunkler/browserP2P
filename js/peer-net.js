@@ -38,6 +38,7 @@ class PeerNet {
     this.code = null;
     this.conns = new Map(); // host: peerId -> DataConnection
     this.hostConn = null; // client: connection to the host
+    this.mediaCalls = new Map(); // peerId -> MediaConnection
     this._handlers = new Map();
     this._closed = false;
   }
@@ -102,6 +103,19 @@ class PeerNet {
         this._emit("peer-leave", conn.peer);
       });
     });
+    this._acceptMediaCalls(peer);
+  }
+
+  _acceptMediaCalls(peer) {
+    peer.on("call", (call) => {
+      if (this._closed) return;
+      this.mediaCalls.set(call.peer, call);
+      this._emit("media-call", call);
+      call.on("close", () => {
+        this.mediaCalls.delete(call.peer);
+        this._emit("media-close", call.peer);
+      });
+    });
   }
 
   /* ----- AUTO (one game per network) ----- */
@@ -146,6 +160,7 @@ class PeerNet {
         if (settled || this._closed) return;
         settled = true;
         clearTimeout(timer);
+        this._acceptMediaCalls(peer);
         this._emit("connected");
       });
       conn.on("data",  (data) => { if (!this._closed) this._emit("message", { from: "host", data }); });
@@ -201,7 +216,11 @@ class PeerNet {
       if (this._closed) return;
       const conn = peer.connect(PREFIX + code, { reliable: true });
       this.hostConn = conn;
-      conn.on("open", () => { if (!this._closed) this._emit("connected"); });
+      conn.on("open", () => {
+        if (this._closed) return;
+        this._acceptMediaCalls(peer);
+        this._emit("connected");
+      });
       conn.on("data", (data) => { if (!this._closed) this._emit("message", { from: "host", data }); });
       conn.on("close", () => { if (!this._closed) this._emit("host-closed"); });
     });
@@ -228,6 +247,13 @@ class PeerNet {
     if (this.hostConn && this.hostConn.open) this.hostConn.send(msg);
   }
 
+  call(peerId, stream) {
+    if (!this.peer || this._closed) return null;
+    const call = this.peer.call(peerId, stream);
+    if (call) this.mediaCalls.set(peerId, call);
+    return call;
+  }
+
   peerCount() {
     return this.isHost ? this.conns.size : this.hostConn ? 1 : 0;
   }
@@ -251,6 +277,7 @@ class PeerNet {
     if (this.peer) this.peer.destroy();
     this.peer = null;
     this.conns.clear();
+    this.mediaCalls.clear();
     this.hostConn = null;
   }
 }

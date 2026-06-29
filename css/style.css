@@ -159,6 +159,7 @@ html, body {
 .hud-bottom-left   { bottom: 28px; left: 16px; }
 .hud-bottom-right  { bottom: 28px; right: 16px; }
 .hud-bottom-right-2 { bottom: 28px; right: 76px; } /* 16 + 48 + 12 gap */
+.hud-bottom-right-3 { bottom: 28px; right: 136px; }
 
 .hud-btn.active {
   background: var(--accent);
@@ -208,6 +209,57 @@ html, body {
   border-radius: 50%;
   background: transparent;
   cursor: pointer;
+}
+
+.video-tray {
+  position: fixed;
+  z-index: 19;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: min(42vw, 180px);
+  pointer-events: none;
+}
+
+.video-tile {
+  position: relative;
+  overflow: hidden;
+  border: 2px solid rgba(124, 252, 155, 0.8);
+  border-radius: 14px;
+  background: #05050a;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.video-tile video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+}
+
+.video-label {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+}
+
+.live-pill {
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: #ff5d5d;
+  color: #fff;
+  font-size: 0.58rem;
+  letter-spacing: 0.04em;
 }
 
 .badge {

@@ -1,4 +1,4 @@
-const APP_VERSION = "1.9.5";
+const APP_VERSION = "2.0.0";
 const CACHE_NAME = `browserp2p-${APP_VERSION}`;
 const APP_SHELL = [
   "./",
