@@ -41,9 +41,65 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
+const APP_VERSION = "1.1.0";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
+
+// ============================================================ PWA ===========
+let swRegistration = null;
+
+function setUpdateStatus(text) {
+  const el = $("#update-status");
+  if (el) el.textContent = text;
+}
+
+function refreshReady(reg) {
+  setUpdateStatus("Update ready. Restarting…");
+  reg.waiting.postMessage({ type: "SKIP_WAITING" });
+}
+
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) {
+    setUpdateStatus("Offline caching is not supported in this browser.");
+    return;
+  }
+
+  try {
+    swRegistration = await navigator.serviceWorker.register("./sw.js");
+    if (swRegistration.waiting) refreshReady(swRegistration);
+    swRegistration.addEventListener("updatefound", () => {
+      const worker = swRegistration.installing;
+      if (!worker) return;
+      worker.addEventListener("statechange", () => {
+        if (worker.state === "installed" && navigator.serviceWorker.controller) refreshReady(swRegistration);
+      });
+    });
+  } catch {
+    setUpdateStatus("Offline caching could not be enabled.");
+  }
+}
+
+async function checkForUpdates() {
+  if (!swRegistration) {
+    setUpdateStatus("Offline caching is still starting. Try again in a moment.");
+    return;
+  }
+
+  setUpdateStatus("Checking for updated files…");
+  try {
+    await swRegistration.update();
+    if (swRegistration.waiting) {
+      refreshReady(swRegistration);
+    } else {
+      setUpdateStatus("You have the latest files.");
+    }
+  } catch {
+    setUpdateStatus("Could not check for updates.");
+  }
+}
+
+navigator.serviceWorker?.addEventListener("controllerchange", () => location.reload());
 
 // ============================================================ IDENTITY ======
 function clientId() {
@@ -78,8 +134,9 @@ const profiles = new Map();
 profiles.set(MY_ID, { name: profile.name, color: myColor, icon: profile.icon });
 
 // ============================================================ NET ==========
-const net = new PeerNet();
-let autoMode = false;
+let net = new PeerNet();
+let autoMode = true;
+let hasLeftLobby = false;
 
 // ============================================================ DOM ===========
 const $ = (sel) => document.querySelector(sel);
@@ -118,60 +175,67 @@ function addPlayer(id, name, peerId, icon, preferredColor) {
 }
 
 // ============================================================ NET WIRING ====
-net.on("ready", () => {
-  if (lastState.length > 0) {
-    // Host migration: restore last snapshot so players keep colors and positions.
-    for (const p of lastState) {
-      players.set(p.id, { ...p, icon: p.icon || DEFAULT_ICON });
-      usedColors.add(p.color);
-      profiles.set(p.id, { name: p.name, color: p.color, icon: p.icon || DEFAULT_ICON });
+function wireNetEvents() {
+  net.on("ready", () => {
+    if (lastState.length > 0) {
+      // Host migration: restore last snapshot so players keep colors and positions.
+      for (const p of lastState) {
+        players.set(p.id, { ...p, icon: p.icon || DEFAULT_ICON });
+        usedColors.add(p.color);
+        profiles.set(p.id, { name: p.name, color: p.color, icon: p.icon || DEFAULT_ICON });
+      }
+    } else {
+      addPlayer(MY_ID, profile.name, null, profile.icon, profile.color);
     }
-  } else {
-    addPlayer(MY_ID, profile.name, null, profile.icon, profile.color);
-  }
-  startHostLoop();
-  if (autoMode) { show("play"); } else { renderLobby(); show("lobby"); }
-});
+    startHostLoop();
+    renderLobby();
+    show("lobby");
+  });
 
-net.on("peer-join", () => renderLobby());
+  net.on("peer-join", () => renderLobby());
 
-net.on("peer-leave", (peerId) => {
-  const id = peerMap.get(peerId);
-  if (id) {
-    const p = players.get(id);
-    const name = p ? p.name : "Someone";
-    if (p) usedColors.delete(p.color);
-    players.delete(id);
-    peerMap.delete(peerId);
-    markSilent(id);
-    pushSys(name + " left");
-    net.broadcast({ t: "sys", text: name + " left" });
-  }
-  renderLobby();
-});
+  net.on("peer-leave", (peerId) => {
+    const id = peerMap.get(peerId);
+    if (id) {
+      const p = players.get(id);
+      const name = p ? p.name : "Someone";
+      if (p) usedColors.delete(p.color);
+      players.delete(id);
+      peerMap.delete(peerId);
+      markSilent(id);
+      pushSys(name + " left");
+      net.broadcast({ t: "sys", text: name + " left" });
+    }
+    renderLobby();
+  });
 
-net.on("connected", () => {
-  net.send({ t: "hello", id: MY_ID, name: profile.name, icon: profile.icon, preferredColor: profile.color });
-  show("play");
-});
+  net.on("connected", () => {
+    net.send({ t: "hello", id: MY_ID, name: profile.name, icon: profile.icon, preferredColor: profile.color });
+    show("lobby");
+  });
 
-net.on("host-closed", () => {
-  if (!autoMode) { alert("The host left. Game over."); location.reload(); return; }
-  const myIndex = lastHostOrder.indexOf(MY_ID);
-  const delay = Math.max(0, myIndex) * 700;
-  hostLoopRunning = false;
-  setTimeout(() => net.migrate(AUTO_CHANNEL), delay);
-});
+  net.on("host-closed", () => {
+    if (hasLeftLobby) return;
+    if (!autoMode) { alert("The host left. Game over."); location.reload(); return; }
+    const myIndex = lastHostOrder.indexOf(MY_ID);
+    const delay = Math.max(0, myIndex) * 700;
+    hostLoopRunning = false;
+    setTimeout(() => {
+      if (!hasLeftLobby) net.migrate(AUTO_CHANNEL);
+    }, delay);
+  });
 
-net.on("error", (err) => {
-  console.error(err);
-  setStatus("Connection error: " + (err.type || err.message || err));
-});
+  net.on("error", (err) => {
+    console.error(err);
+    setStatus("Connection error: " + (err.type || err.message || err));
+  });
 
-net.on("message", ({ from, data }) => {
-  if (net.isHost) handleHostMsg(from, data);
-  else handleClientMsg(data);
-});
+  net.on("message", ({ from, data }) => {
+    if (net.isHost) handleHostMsg(from, data);
+    else handleClientMsg(data);
+  });
+}
+wireNetEvents();
 
 // ---- host-side message handling ----
 function handleHostMsg(peerId, msg) {
@@ -212,13 +276,6 @@ function handleHostMsg(peerId, msg) {
     renderChat();
     net.broadcast({ t: "chat", fromId: id, text: msg.text, ts: entry.ts });
 
-  } else if (msg.t === "voice") {
-    const id = peerMap.get(peerId);
-    if (!id) return;
-    msg.fromId = id; // use server-verified id
-    receiveVoiceMessage(msg);
-    net.broadcast({ t: "voice", fromId: id, msgId: msg.msgId, mimeType: msg.mimeType, audioB64: msg.audioB64, duration: msg.duration, ts: msg.ts });
-
   } else if (msg.t === "audio-start" || msg.t === "audio-stop" || msg.t === "audio-pcm") {
     const id = peerMap.get(peerId);
     if (!id) return;
@@ -236,6 +293,7 @@ function handleClientMsg(msg) {
     profile.color = msg.color;
     profiles.set(MY_ID, { ...profiles.get(MY_ID), color: myColor });
     updateProfilePreview();
+    renderLobby();
 
   } else if (msg.t === "state") {
     lastState = msg.players;
@@ -243,6 +301,7 @@ function handleClientMsg(msg) {
     for (const p of msg.players) {
       profiles.set(p.id, { name: p.name, color: p.color, icon: p.icon || DEFAULT_ICON });
     }
+    renderLobby();
 
   } else if (msg.t === "profile") {
     profiles.set(msg.id, { name: msg.name, color: msg.color, icon: msg.icon });
@@ -265,9 +324,6 @@ function handleClientMsg(msg) {
     saveChatLog();
     renderChat();
     if (!chatOpen) showChatBadge();
-
-  } else if (msg.t === "voice") {
-    receiveVoiceMessage(msg);
 
   } else if (msg.t === "audio-start" || msg.t === "audio-stop" || msg.t === "audio-pcm") {
     handleLiveAudio(msg);
@@ -335,45 +391,18 @@ function renderChat() {
     const el   = document.createElement("div");
     el.className = "chat-msg" + (isMe ? " mine" : "");
 
-    if (entry.voice) {
-      const hasAudio = voiceCache.has(entry.msgId);
-      const dur      = fmtDur(entry.duration || 0);
-      el.innerHTML = `
-        <div class="msg-avatar" style="background:${pf.color}">${pf.icon}</div>
-        <div class="msg-body">
-          <div class="msg-name" style="color:${pf.color}">${esc(pf.name)}</div>
-          <div class="msg-bubble voice-bubble">
-            <span class="voice-icon">🎤</span>
-            <span class="voice-dur">${dur}</span>
-            <button class="play-btn${hasAudio ? "" : " expired"}"
-                    data-msg-id="${entry.msgId}"
-                    ${hasAudio ? "" : "disabled"}
-                    title="${hasAudio ? "Replay" : "Expired"}">
-              ${hasAudio ? "▶" : "✕"}
-            </button>
-          </div>
-        </div>`;
-    } else {
-      el.innerHTML = `
-        <div class="msg-avatar" style="background:${pf.color}">${pf.icon}</div>
-        <div class="msg-body">
-          <div class="msg-name" style="color:${pf.color}">${esc(pf.name)}</div>
-          <div class="msg-bubble">${esc(entry.text)}</div>
-        </div>`;
-    }
+    if (entry.voice) continue; // voice messages no longer shown in thread
+    el.innerHTML = `
+      <div class="msg-avatar" style="background:${pf.color}">${pf.icon}</div>
+      <div class="msg-body">
+        <div class="msg-name" style="color:${pf.color}">${esc(pf.name)}</div>
+        <div class="msg-bubble">${esc(entry.text)}</div>
+      </div>`;
     log.appendChild(el);
   }
   if (wasAtBottom) log.scrollTop = log.scrollHeight;
 }
 
-// Replay clicks delegated from the log container.
-$("#chat-log").addEventListener("click", (e) => {
-  const btn = e.target.closest(".play-btn:not(.expired)");
-  if (!btn) return;
-  const cached = voiceCache.get(btn.dataset.msgId);
-  // Replay is user-initiated so HTMLAudio works here on all platforms.
-  if (cached?.url) new Audio(cached.url).play().catch(() => {});
-});
 
 function showChatBadge() {
   unreadCount++;
@@ -396,7 +425,6 @@ function openChat() {
 }
 
 function closeChat() {
-  stopRecording(); // safety — cancel any in-progress recording
   chatOpen = false;
   $("#panel-chat").classList.remove("open");
 }
@@ -741,7 +769,33 @@ function openProfileSheet() {
 
 function closeProfileSheet() {
   profileOpen = false;
-  $("#sheet-profile").classList.remove("open");
+  $("#sheet-profile")?.classList.remove("open");
+}
+
+function leaveLobby() {
+  hasLeftLobby = true;
+  autoMode = false;
+  hostLoopRunning = false;
+  stopLiveVoice();
+  net.destroy();
+  players.clear();
+  peerMap.clear();
+  usedColors.clear();
+  lastState = [];
+  lastHostOrder = [];
+  closeProfileSheet();
+  show("menu");
+  $("#btn-auto").disabled = false;
+  $("#auto-status").textContent = "Finds or starts the game on your Wi-Fi.";
+  setStatus("");
+}
+
+function enterDefaultLobby() {
+  hasLeftLobby = false;
+  autoMode = true;
+  renderLobby();
+  show("lobby");
+  net.auto(AUTO_CHANNEL);
 }
 
 function buildColorPicker() {
@@ -835,19 +889,21 @@ $("#input-name").addEventListener("input", (e) => {
 
 // ============================================================ LOBBY UI ======
 function renderLobby() {
-  if (!net.isHost) return;
-  $("#lobby-code").textContent = net.code || "----";
-  const joinUrl = `${location.origin}${location.pathname}?join=${net.code}`;
-  $("#join-url").textContent = joinUrl.replace(/^https?:\/\//, "");
-  drawQR(joinUrl);
+  const code = net.code || "----";
+  $("#lobby-code").textContent = code;
+  const joinUrl = `${location.origin}${location.pathname}?join=${code}`;
+  $("#join-url").textContent = code === "----" ? "Joining lobby…" : joinUrl.replace(/^https?:\/\//, "");
+  if (code === "----") $("#qr").innerHTML = "";
+  else drawQR(joinUrl);
   const list = $("#player-list");
   list.innerHTML = "";
-  for (const p of players.values()) {
+  const lobbyPlayers = net.isHost ? Array.from(players.values()) : lastState;
+  for (const p of lobbyPlayers) {
     const li = document.createElement("li");
     li.innerHTML = `<span class="swatch" style="background:${p.color}"></span>${esc(p.name)}`;
     list.appendChild(li);
   }
-  $("#player-count").textContent = players.size;
+  $("#player-count").textContent = lobbyPlayers.length;
 }
 
 let qr = null;
@@ -964,10 +1020,12 @@ function render() {
 
 // ============================================================ MENU ACTIONS ==
 $("#btn-auto").addEventListener("click", () => {
-  autoMode = true;
+  if (!hasLeftLobby) return;
+  net = new PeerNet();
+  wireNetEvents();
   $("#btn-auto").disabled = true;
   $("#auto-status").textContent = "Looking for a game on your Wi-Fi…";
-  net.auto(AUTO_CHANNEL);
+  enterDefaultLobby();
 });
 
 $("#btn-host").addEventListener("click", () => {
@@ -990,7 +1048,11 @@ if (joinParam) $("#code-input").value = joinParam.toUpperCase();
 
 // ============================================================ PROFILE ACTIONS
 $("#btn-profile").addEventListener("click", openProfileSheet);
+$("#btn-lobby-settings").addEventListener("click", openProfileSheet);
 $("#btn-close-profile").addEventListener("click", closeProfileSheet);
+$("#app-version").textContent = APP_VERSION;
+$("#btn-check-update").addEventListener("click", checkForUpdates);
+$("#btn-leave-lobby").addEventListener("click", leaveLobby);
 
 // ============================================================ CHAT ACTIONS ==
 $("#btn-chat").addEventListener("click", openChat);
@@ -1011,4 +1073,6 @@ function esc(s) {
 }
 
 // Kick off the render loop; draws nothing until we're playing.
+registerServiceWorker();
+enterDefaultLobby();
 render();

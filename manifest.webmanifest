@@ -1,0 +1,18 @@
+{
+  "name": "browserP2P",
+  "short_name": "browserP2P",
+  "description": "Phone-to-phone over your Wi-Fi.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#12121f",
+  "theme_color": "#12121f",
+  "icons": [
+    {
+      "src": "icons/robot.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

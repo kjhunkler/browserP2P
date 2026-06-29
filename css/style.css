@@ -51,6 +51,7 @@ html, body {
 }
 .btn:active { transform: scale(0.96); }
 .btn-primary { background: var(--accent); color: #06210f; }
+.btn-danger { background: #ff5d5d; color: #fff; }
 .btn-big { font-size: 1.4rem; padding: 18px 48px; border-radius: 18px; }
 
 /* ===== Menu ===== */
@@ -208,6 +209,27 @@ html, body {
   justify-content: space-between;
 }
 .sheet-header h2 { margin: 0; font-size: 1.2rem; }
+
+.app-update-group {
+  padding: 14px;
+  border: 1px solid #2c2c44;
+  border-radius: 16px;
+  background: rgba(28, 28, 46, 0.55);
+}
+
+.version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.btn-small {
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 0.9rem;
+}
 
 .close-btn {
   width: 36px;

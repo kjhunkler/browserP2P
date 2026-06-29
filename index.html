@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#12121f" />
   <title>browserP2P</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/robot.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icons/robot.svg" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
@@ -13,7 +16,7 @@
     <!-- ===== Menu ===== -->
     <section id="screen-menu" class="screen active">
       <h1 class="title">browser<span>P2P</span></h1>
-      <p class="tagline">Phone-to-phone over your Wi-Fi. No install.</p>
+      <p class="tagline">Phone-to-phone over your Wi-Fi. Joining lobby…</p>
 
       <button id="btn-auto" class="btn btn-primary btn-big">Play</button>
       <p id="auto-status" class="status">Finds or starts the game on your Wi-Fi.</p>
@@ -41,12 +44,13 @@
       <ul id="player-list" class="player-list"></ul>
 
       <button id="btn-start" class="btn btn-primary">Start</button>
+      <button id="btn-lobby-settings" class="hud-btn hud-top-left" aria-label="Settings">⚙️</button>
     </section>
 
     <!-- ===== Play ===== -->
     <section id="screen-play" class="screen">
       <canvas id="stage"></canvas>
-      <button id="btn-profile" class="hud-btn hud-top-left" aria-label="Profile">🎨</button>
+      <button id="btn-profile" class="hud-btn hud-top-left" aria-label="Settings">⚙️</button>
       <button id="btn-mic"  class="hud-btn hud-bottom-right-2" aria-label="Record voice" type="button">🎤</button>
       <button id="btn-chat" class="hud-btn hud-bottom-right"  aria-label="Chat">
         💬<span id="chat-badge" class="badge hidden">0</span>
@@ -55,11 +59,20 @@
 
   </div>
 
-  <!-- ===== Profile sheet (slides in from right) ===== -->
+  <!-- ===== Settings sheet (slides in from right) ===== -->
   <div id="sheet-profile" class="sheet" aria-hidden="true">
     <div class="sheet-header">
-      <h2>Your Profile</h2>
+      <h2>Settings</h2>
       <button id="btn-close-profile" class="close-btn" aria-label="Close">✕</button>
+    </div>
+    <div class="field-group app-update-group">
+      <label>App</label>
+      <div class="version-row">
+        <span>Version <strong id="app-version">1.1.0</strong></span>
+        <button id="btn-check-update" class="btn btn-small" type="button">Check for updates</button>
+        <button id="btn-leave-lobby" class="btn btn-small btn-danger" type="button">Leave lobby</button>
+      </div>
+      <p id="update-status" class="status"></p>
     </div>
     <div class="profile-preview-row">
       <div id="preview-dot" class="preview-dot"></div>
