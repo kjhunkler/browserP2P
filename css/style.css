@@ -156,8 +156,14 @@ html, body {
 }
 .hud-btn:active { transform: scale(0.92); }
 .hud-top-left      { top: 16px; left: 16px; }
+.hud-bottom-left   { bottom: 28px; left: 16px; }
 .hud-bottom-right  { bottom: 28px; right: 16px; }
 .hud-bottom-right-2 { bottom: 28px; right: 76px; } /* 16 + 48 + 12 gap */
+
+.hud-btn.active {
+  background: var(--accent);
+  color: #06210f;
+}
 
 .hud-btn.recording {
   background: rgba(255, 93, 93, 0.88);

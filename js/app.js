@@ -41,7 +41,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.5.0";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -100,6 +100,70 @@ async function checkForUpdates() {
 }
 
 navigator.serviceWorker?.addEventListener("controllerchange", () => location.reload());
+
+// ============================================================ WAKE LOCK ======
+const WAKE_LOCK_KEY = "bp2p-keep-awake";
+let keepAwake = localStorage.getItem(WAKE_LOCK_KEY) === "1";
+let wakeLock = null;
+
+function setWakeStatus(text) {
+  const el = $("#wake-status");
+  if (el) el.textContent = text;
+}
+
+function syncWakeUi() {
+  const btn = $("#btn-keep-awake");
+  if (!btn) return;
+
+  if (!("wakeLock" in navigator)) {
+    btn.disabled = true;
+    btn.textContent = "Unavailable";
+    setWakeStatus("This browser does not support keeping the screen awake.");
+    return;
+  }
+
+  btn.disabled = false;
+  btn.textContent = keepAwake ? "On" : "Off";
+  setWakeStatus(keepAwake
+    ? (wakeLock ? "Screen wake lock is active." : "Screen wake lock will activate while the app is visible.")
+    : "Turn on to help keep live voice active while the app is open.");
+}
+
+async function requestWakeLock() {
+  if (!keepAwake || !("wakeLock" in navigator) || document.visibilityState !== "visible") {
+    syncWakeUi();
+    return;
+  }
+
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => {
+      wakeLock = null;
+      syncWakeUi();
+    });
+  } catch {
+    wakeLock = null;
+  }
+  syncWakeUi();
+}
+
+async function releaseWakeLock() {
+  const lock = wakeLock;
+  wakeLock = null;
+  if (lock) await lock.release().catch(() => {});
+  syncWakeUi();
+}
+
+async function toggleKeepAwake() {
+  keepAwake = !keepAwake;
+  localStorage.setItem(WAKE_LOCK_KEY, keepAwake ? "1" : "0");
+  if (keepAwake) await requestWakeLock();
+  else await releaseWakeLock();
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") requestWakeLock();
+});
 
 // ============================================================ NOTIFICATIONS =
 const NOTIFY_JOIN_KEY = "bp2p-notify-joins";
@@ -313,6 +377,7 @@ function handleHostMsg(peerId, msg) {
     const p = addPlayer(msg.id, msg.name, peerId, msg.icon, msg.preferredColor);
     net.sendTo(peerId, { t: "welcome", color: p.color });
     net.sendTo(peerId, { t: "history", chatLog });
+    net.sendTo(peerId, { t: "drawing", strokes: drawingStrokes });
     pushSys(p.name + " joined");
     net.broadcast({ t: "sys", text: p.name + " joined" });
     if (p.id !== MY_ID) notifyPlayerJoined(p.name);
@@ -346,6 +411,12 @@ function handleHostMsg(peerId, msg) {
     saveChatLog();
     renderChat();
     net.broadcast({ t: "chat", fromId: id, text: msg.text, ts: entry.ts });
+
+  } else if (msg.t === "draw") {
+    addDrawingStroke(msg.stroke, false);
+    for (const [targetPeerId, conn] of net.conns) {
+      if (targetPeerId !== peerId && conn.open) conn.send({ t: "draw", stroke: msg.stroke });
+    }
 
   } else if (msg.t === "audio-start" || msg.t === "audio-stop" || msg.t === "audio-pcm") {
     const id = peerMap.get(peerId);
@@ -390,11 +461,17 @@ function handleClientMsg(msg) {
     saveChatLog();
     renderChat();
 
+  } else if (msg.t === "drawing") {
+    replaceDrawing(msg.strokes);
+
   } else if (msg.t === "chat") {
     chatLog.push({ fromId: msg.fromId, text: msg.text, ts: msg.ts });
     saveChatLog();
     renderChat();
     if (!chatOpen) showChatBadge();
+
+  } else if (msg.t === "draw") {
+    addDrawingStroke(msg.stroke, false);
 
   } else if (msg.t === "audio-start" || msg.t === "audio-stop" || msg.t === "audio-pcm") {
     handleLiveAudio(msg);
@@ -439,6 +516,75 @@ function saveChatLog() {
 const chatLog = loadChatLog();
 let chatOpen   = false;
 let unreadCount = 0;
+
+// ============================================================ DRAWING =======
+const DRAWING_KEY = "bp2p-drawing";
+const DRAWING_LIMIT = 800;
+const DRAW_COLOR = "#fff";
+
+function loadDrawing() {
+  try { return JSON.parse(localStorage.getItem(DRAWING_KEY) || "[]"); } catch { return []; }
+}
+function saveDrawing() {
+  try { localStorage.setItem(DRAWING_KEY, JSON.stringify(drawingStrokes.slice(-DRAWING_LIMIT))); } catch {}
+}
+
+const drawingStrokes = loadDrawing();
+let drawMode = false;
+let drawing = false;
+let currentStroke = null;
+
+function addDrawingStroke(stroke, broadcast = true) {
+  if (!stroke || !stroke.points || stroke.points.length < 2) return;
+  if (stroke.id && drawingStrokes.some((s) => s.id === stroke.id)) return;
+  drawingStrokes.push(stroke);
+  if (drawingStrokes.length > DRAWING_LIMIT) drawingStrokes.splice(0, drawingStrokes.length - DRAWING_LIMIT);
+  saveDrawing();
+  if (broadcast) sendDrawingStroke(stroke);
+}
+
+function replaceDrawing(strokes) {
+  drawingStrokes.length = 0;
+  drawingStrokes.push(...(Array.isArray(strokes) ? strokes.slice(-DRAWING_LIMIT) : []));
+  saveDrawing();
+}
+
+function sendDrawingStroke(stroke) {
+  const msg = { t: "draw", stroke };
+  if (net.isHost) net.broadcast(msg);
+  else net.send(msg);
+}
+
+function drawStroke(stroke, rect) {
+  const points = stroke.points || [];
+  if (points.length < 2) return;
+  ctx.save();
+  ctx.strokeStyle = stroke.color || DRAW_COLOR;
+  ctx.lineWidth = stroke.width || 4;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(points[0].x * rect.width, points[0].y * rect.height);
+  for (let i = 1; i < points.length - 1; i++) {
+    const midX = ((points[i].x + points[i + 1].x) / 2) * rect.width;
+    const midY = ((points[i].y + points[i + 1].y) / 2) * rect.height;
+    ctx.quadraticCurveTo(points[i].x * rect.width, points[i].y * rect.height, midX, midY);
+  }
+  const last = points[points.length - 1];
+  ctx.lineTo(last.x * rect.width, last.y * rect.height);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function renderDrawing(rect) {
+  for (const stroke of drawingStrokes) drawStroke(stroke, rect);
+  if (currentStroke) drawStroke(currentStroke, rect);
+}
+
+function setDrawMode(enabled) {
+  drawMode = enabled;
+  $("#btn-draw").classList.toggle("active", drawMode);
+}
 
 function pushSys(text) {
   chatLog.push({ sys: true, text });
@@ -673,8 +819,9 @@ function receiveVoiceMessage(msg) {
   autoPlayVoice(blob);
 }
 
-// PTT events — shared handler for both the in-chat button and the HUD mic button.
+// PTT events for optional record-to-thread buttons.
 function attachPtt(btn) {
+  if (!btn) return;
   btn.addEventListener("mousedown",   (e) => { e.preventDefault(); startRecording(); });
   btn.addEventListener("mouseup",     stopRecording);
   btn.addEventListener("mouseleave",  stopRecording);
@@ -856,6 +1003,9 @@ function leaveLobby() {
   usedColors.clear();
   lastState = [];
   lastHostOrder = [];
+  drawing = false;
+  currentStroke = null;
+  setDrawMode(false);
   closeProfileSheet();
   show("menu");
   $("#btn-auto").disabled = false;
@@ -1019,13 +1169,37 @@ function pointerToNorm(e) {
   };
 }
 
+function pointerPressure(e) {
+  const src = e.touches ? e.touches[0] : e;
+  return src.force || src.pressure || 0.5;
+}
+
 function onDown(e) {
   // Don't drag when a sheet or chat panel is open.
   if (profileOpen || chatOpen) return;
+  if (drawMode) {
+    e.preventDefault();
+    drawing = true;
+    const point = pointerToNorm(e);
+    currentStroke = {
+      id: MY_ID + "-" + Date.now(),
+      color: DRAW_COLOR,
+      width: 2 + pointerPressure(e) * 6,
+      points: [point],
+    };
+    return;
+  }
   dragging = true;
   onMove(e);
 }
 function onMove(e) {
+  if (drawing && currentStroke) {
+    e.preventDefault();
+    const point = pointerToNorm(e);
+    const last = currentStroke.points[currentStroke.points.length - 1];
+    if (!last || Math.hypot(point.x - last.x, point.y - last.y) > 0.003) currentStroke.points.push(point);
+    return;
+  }
   if (!dragging) return;
   e.preventDefault();
   const { x, y } = pointerToNorm(e);
@@ -1036,7 +1210,12 @@ function onMove(e) {
     net.send({ t: "input", x, y });
   }
 }
-function onUp() { dragging = false; }
+function onUp() {
+  if (drawing && currentStroke) addDrawingStroke(currentStroke);
+  drawing = false;
+  currentStroke = null;
+  dragging = false;
+}
 
 canvas.addEventListener("mousedown",  onDown);
 canvas.addEventListener("mousemove",  onMove);
@@ -1044,10 +1223,12 @@ window.addEventListener("mouseup",    onUp);
 canvas.addEventListener("touchstart", onDown, { passive: false });
 canvas.addEventListener("touchmove",  onMove, { passive: false });
 window.addEventListener("touchend",   onUp);
+window.addEventListener("touchcancel", onUp);
 
 function render() {
   const rect = syncCanvasSize();
   ctx.clearRect(0, 0, rect.width, rect.height);
+  renderDrawing(rect);
 
   for (const p of lastState) {
     const x = p.x * rect.width;
@@ -1114,6 +1295,7 @@ $("#btn-join").addEventListener("click", () => {
 });
 
 $("#btn-start").addEventListener("click", () => show("play"));
+$("#btn-draw").addEventListener("click", () => setDrawMode(!drawMode));
 
 // Auto-join from QR link (?join=CODE).
 const joinParam = new URLSearchParams(location.search).get("join");
@@ -1126,6 +1308,8 @@ $("#btn-close-profile").addEventListener("click", closeProfileSheet);
 $("#app-version").textContent = APP_VERSION;
 $("#btn-check-update").addEventListener("click", checkForUpdates);
 $("#btn-leave-lobby").addEventListener("click", leaveLobby);
+$("#btn-keep-awake").addEventListener("click", toggleKeepAwake);
+syncWakeUi();
 $("#btn-enable-notifications").addEventListener("click", enableJoinNotifications);
 syncNotificationUi();
 
@@ -1149,5 +1333,6 @@ function esc(s) {
 
 // Kick off the render loop; draws nothing until we're playing.
 registerServiceWorker();
+requestWakeLock();
 enterDefaultLobby();
 render();

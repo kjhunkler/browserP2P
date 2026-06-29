@@ -68,11 +68,19 @@
     <div class="field-group app-update-group">
       <label>App</label>
       <div class="version-row">
-        <span>Version <strong id="app-version">1.2.0</strong></span>
+        <span>Version <strong id="app-version">1.5.0</strong></span>
         <button id="btn-check-update" class="btn btn-small" type="button">Check for updates</button>
         <button id="btn-leave-lobby" class="btn btn-small btn-danger" type="button">Leave lobby</button>
       </div>
       <p id="update-status" class="status"></p>
+    </div>
+    <div class="field-group app-update-group">
+      <label>Display</label>
+      <div class="version-row">
+        <span>Keep screen awake</span>
+        <button id="btn-keep-awake" class="btn btn-small" type="button">Off</button>
+      </div>
+      <p id="wake-status" class="status"></p>
     </div>
     <div class="field-group app-update-group">
       <label>Notifications</label>
@@ -111,12 +119,6 @@
       <input id="chat-input" type="text" class="chat-text-input"
              placeholder="Message…" maxlength="200" autocomplete="off" />
       <button id="btn-send" class="btn btn-primary send-btn">↑</button>
-    </div>
-    <div class="ptt-row">
-      <button id="btn-ptt" class="ptt-btn" type="button">
-        <span>🎤</span>
-        <span id="ptt-label">Hold to talk</span>
-      </button>
     </div>
   </div>
 
