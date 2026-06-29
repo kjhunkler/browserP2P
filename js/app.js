@@ -41,7 +41,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "1.9.2";
+const APP_VERSION = "1.9.3";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -448,6 +448,10 @@ function handleHostMsg(peerId, msg) {
       if (targetPeerId !== peerId && conn.open) conn.send({ t: "draw", stroke: msg.stroke });
     }
 
+  } else if (msg.t === "draw-clear") {
+    clearDrawing(false);
+    net.broadcast({ t: "draw-clear" });
+
   } else if (msg.t === "audio-start" || msg.t === "audio-stop" || msg.t === "audio-pcm") {
     const id = peerMap.get(peerId);
     if (!id) return;
@@ -502,6 +506,9 @@ function handleClientMsg(msg) {
 
   } else if (msg.t === "draw") {
     addDrawingStroke(msg.stroke, false);
+
+  } else if (msg.t === "draw-clear") {
+    clearDrawing(false);
 
   } else if (msg.t === "audio-start" || msg.t === "audio-stop" || msg.t === "audio-pcm") {
     handleLiveAudio(msg);
@@ -601,8 +608,21 @@ function replaceDrawing(strokes) {
   saveDrawing();
 }
 
+function clearDrawing(broadcast = true) {
+  drawingStrokes.length = 0;
+  currentStroke = null;
+  saveDrawing();
+  if (broadcast) sendDrawingClear();
+}
+
 function sendDrawingStroke(stroke) {
   const msg = { t: "draw", stroke };
+  if (net.isHost) net.broadcast(msg);
+  else net.send(msg);
+}
+
+function sendDrawingClear() {
+  const msg = { t: "draw-clear" };
   if (net.isHost) net.broadcast(msg);
   else net.send(msg);
 }
@@ -1439,6 +1459,9 @@ $("#btn-menu-settings")?.addEventListener("click", openProfileSheet);
 $("#btn-close-profile").addEventListener("click", closeProfileSheet);
 $("#app-version").textContent = APP_VERSION;
 $("#btn-check-update").addEventListener("click", checkForUpdates);
+$("#btn-clear-drawing").addEventListener("click", () => {
+  if (confirm("Clear all drawings for everyone?")) clearDrawing();
+});
 $("#btn-leave-lobby").addEventListener("click", leaveLobby);
 $("#btn-keep-awake").addEventListener("click", toggleKeepAwake);
 syncWakeUi();
