@@ -41,7 +41,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.0.4";
+const APP_VERSION = "2.0.9";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -470,6 +470,10 @@ function handleHostMsg(peerId, msg) {
     clearDrawing(false);
     net.broadcast({ t: "draw-clear" });
 
+  } else if (msg.t === "drawing") {
+    replaceDrawing(msg.strokes);
+    net.broadcast({ t: "drawing", strokes: drawingStrokes });
+
   } else if (msg.t === "video-on") {
     const id = peerMap.get(peerId);
     if (!id) return;
@@ -546,6 +550,9 @@ function handleClientMsg(msg) {
 
   } else if (msg.t === "draw-clear") {
     clearDrawing(false);
+
+  } else if (msg.t === "drawing") {
+    replaceDrawing(msg.strokes);
 
   } else if (msg.t === "video-on") {
     if (msg.fromId !== MY_ID) {
@@ -656,6 +663,7 @@ let unreadCount = 0;
 const DRAWING_KEY = "bp2p-drawing";
 const DRAWING_LIMIT = 800;
 const DRAW_COLOR_KEY = "bp2p-draw-color";
+const DRAW_SIZE_KEY = "bp2p-draw-size";
 const DRAW_DEFAULT_COLOR = "#ffffff";
 const DRAW_PEN_WIDTH = 2.2;
 const DRAW_ERASER_WIDTH = 18;
@@ -671,12 +679,15 @@ const drawingStrokes = loadDrawing();
 let drawMode = false;
 let drawTool = "pen";
 let drawColor = localStorage.getItem(DRAW_COLOR_KEY) || DRAW_DEFAULT_COLOR;
+let drawSize = Number(localStorage.getItem(DRAW_SIZE_KEY) || 4);
 let drawing = false;
 let currentStroke = null;
+const drawingRedoStack = [];
 
 function addDrawingStroke(stroke, broadcast = true) {
   if (!stroke || !stroke.points || stroke.points.length < 2) return;
   if (stroke.id && drawingStrokes.some((s) => s.id === stroke.id)) return;
+  if (broadcast) drawingRedoStack.length = 0;
   drawingStrokes.push(stroke);
   if (drawingStrokes.length > DRAWING_LIMIT) drawingStrokes.splice(0, drawingStrokes.length - DRAWING_LIMIT);
   saveDrawing();
@@ -686,20 +697,23 @@ function addDrawingStroke(stroke, broadcast = true) {
 function replaceDrawing(strokes) {
   drawingStrokes.length = 0;
   drawingStrokes.push(...(Array.isArray(strokes) ? strokes.slice(-DRAWING_LIMIT) : []));
+  drawingRedoStack.length = 0;
   saveDrawing();
 }
 
 function clearDrawing(broadcast = true) {
   drawingStrokes.length = 0;
+  drawingRedoStack.length = 0;
   drawing = false;
   currentStroke = null;
   try { localStorage.removeItem(DRAWING_KEY); } catch {}
   if (broadcast) sendDrawingClear();
 }
 
-function clearDrawingFromSettings() {
+function clearDrawingWithConfirmation() {
+  if (!drawingStrokes.length) return;
+  if (!confirm("Clear all drawings for everyone?")) return;
   clearDrawing();
-  setUpdateStatus("Drawings cleared.");
 }
 
 function sendDrawingStroke(stroke) {
@@ -714,8 +728,38 @@ function sendDrawingClear() {
   else net.send(msg);
 }
 
+function sendDrawingReplace() {
+  const msg = { t: "drawing", strokes: drawingStrokes };
+  if (net.isHost) net.broadcast(msg);
+  else net.send(msg);
+}
+
+function undoDrawing() {
+  const stroke = drawingStrokes.pop();
+  if (!stroke) return;
+  drawingRedoStack.push(stroke);
+  saveDrawing();
+  sendDrawingReplace();
+}
+
+function redoDrawing() {
+  const stroke = drawingRedoStack.pop();
+  if (!stroke) return;
+  drawingStrokes.push(stroke);
+  saveDrawing();
+  sendDrawingReplace();
+}
+
 function hostCrown(id) {
   return id && id === currentHostId() ? "👑 " : "";
+}
+
+function colorAtPoint(point) {
+  const rect = syncCanvasSize();
+  const x = Math.max(0, Math.min(rect.width - 1, Math.round(point.x * rect.width)));
+  const y = Math.max(0, Math.min(rect.height - 1, Math.round(point.y * rect.height)));
+  const pixel = ctx.getImageData(x, y, 1, 1).data;
+  return "#" + [pixel[0], pixel[1], pixel[2]].map((v) => v.toString(16).padStart(2, "0")).join("");
 }
 
 function currentHostId() {
@@ -729,6 +773,7 @@ function drawStroke(stroke, rect) {
   if (points.length < 2) return;
   ctx.save();
   if (stroke.tool === "eraser") ctx.globalCompositeOperation = "destination-out";
+  if (stroke.tool === "highlighter") ctx.globalAlpha = 0.38;
   ctx.strokeStyle = stroke.tool === "eraser" ? "#000" : (stroke.color || DRAW_DEFAULT_COLOR);
   ctx.lineWidth = stroke.width || 4;
   ctx.lineCap = "round";
@@ -752,8 +797,10 @@ function renderDrawing(rect) {
 }
 
 function setDrawMode(enabled) {
+  if (selectedGame !== "free-play") enabled = false;
   drawMode = enabled;
   $("#btn-draw")?.classList.toggle("active", drawMode);
+  $("#draw-dock")?.classList.toggle("hidden", selectedGame !== "free-play");
   $("#draw-toolbar")?.classList.toggle("hidden", !drawMode);
   syncDrawToolUi();
 }
@@ -770,11 +817,27 @@ function setDrawColor(color) {
   setDrawTool("pen");
 }
 
+function setDrawSize(size) {
+  drawSize = Math.max(1, Math.min(28, Number(size) || 4));
+  localStorage.setItem(DRAW_SIZE_KEY, String(drawSize));
+  syncDrawToolUi();
+}
+
 function syncDrawToolUi() {
   $("#btn-draw-pen")?.classList.toggle("active", drawTool === "pen");
+  $("#btn-draw-highlighter")?.classList.toggle("active", drawTool === "highlighter");
   $("#btn-draw-eraser")?.classList.toggle("active", drawTool === "eraser");
+  $("#btn-draw-eyedropper")?.classList.toggle("active", drawTool === "eyedropper");
   const input = $("#draw-color");
   if (input && input.value !== drawColor) input.value = drawColor;
+  const size = $("#draw-size");
+  if (size && Number(size.value) !== drawSize) size.value = String(drawSize);
+}
+
+function setGameMode(game) {
+  selectedGame = game || "free-play";
+  if (selectedGame !== "free-play") setDrawMode(false);
+  else setDrawMode(drawMode);
 }
 
 function pushSys(text) {
@@ -837,6 +900,11 @@ function openChat() {
 function closeChat() {
   chatOpen = false;
   $("#panel-chat").classList.remove("open");
+}
+
+function toggleChat() {
+  if (chatOpen) closeChat();
+  else openChat();
 }
 
 function sendChat() {
@@ -1535,12 +1603,18 @@ function onDown(e) {
     e.preventDefault();
     drawing = true;
     const point = pointerToNorm(e);
+    if (drawTool === "eyedropper") {
+      setDrawColor(colorAtPoint(point));
+      drawing = false;
+      return;
+    }
     const pressure = pointerPressure(e);
+    const width = drawTool === "eraser" ? drawSize * 3 : drawTool === "highlighter" ? drawSize * 3.2 : drawSize + pressure * 1.4;
     currentStroke = {
       id: MY_ID + "-" + Date.now(),
       tool: drawTool,
       color: drawTool === "eraser" ? null : drawColor,
-      width: drawTool === "eraser" ? DRAW_ERASER_WIDTH : DRAW_PEN_WIDTH + pressure * 1.4,
+      width,
       points: [point],
     };
     return;
@@ -1669,10 +1743,18 @@ $("#btn-join").addEventListener("click", () => {
 });
 
 $("#btn-start").addEventListener("click", () => show("play"));
+$("#game-select")?.addEventListener("change", (e) => setGameMode(e.target.value));
 $("#btn-draw")?.addEventListener("click", () => setDrawMode(!drawMode));
 $("#btn-draw-pen")?.addEventListener("click", () => setDrawTool("pen"));
+$("#btn-draw-highlighter")?.addEventListener("click", () => setDrawTool("highlighter"));
 $("#btn-draw-eraser")?.addEventListener("click", () => setDrawTool("eraser"));
+$("#btn-draw-eyedropper")?.addEventListener("click", () => setDrawTool("eyedropper"));
 $("#draw-color")?.addEventListener("input", (e) => setDrawColor(e.target.value));
+$("#draw-size")?.addEventListener("input", (e) => setDrawSize(e.target.value));
+$("#btn-draw-undo")?.addEventListener("click", undoDrawing);
+$("#btn-draw-redo")?.addEventListener("click", redoDrawing);
+$("#btn-draw-clear")?.addEventListener("click", clearDrawingWithConfirmation);
+setGameMode($("#game-select")?.value || "free-play");
 syncDrawToolUi();
 
 // Auto-join from QR link (?join=CODE).
@@ -1687,7 +1769,6 @@ $("#btn-menu-settings")?.addEventListener("click", openProfileSheet);
 $("#btn-close-profile").addEventListener("click", closeProfileSheet);
 $("#app-version").textContent = APP_VERSION;
 $("#btn-check-update").addEventListener("click", checkForUpdates);
-$("#btn-clear-drawing").addEventListener("click", clearDrawingFromSettings);
 $("#btn-leave-lobby").addEventListener("click", leaveLobby);
 $("#btn-keep-awake").addEventListener("click", toggleKeepAwake);
 syncWakeUi();
@@ -1695,7 +1776,7 @@ $("#btn-enable-notifications").addEventListener("click", enableJoinNotifications
 syncNotificationUi();
 
 // ============================================================ CHAT ACTIONS ==
-$("#btn-chat").addEventListener("click", openChat);
+$("#btn-chat").addEventListener("click", toggleChat);
 $("#btn-close-chat").addEventListener("click", closeChat);
 $("#btn-send").addEventListener("click", sendChat);
 $("#chat-input").addEventListener("keydown", (e) => {

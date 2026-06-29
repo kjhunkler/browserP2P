@@ -50,20 +50,40 @@
 
     <!-- ===== Play ===== -->
     <section id="screen-play" class="screen">
-      <canvas id="stage"></canvas>
-      <div id="video-tray" class="video-tray" aria-live="polite"></div>
-      <button id="btn-profile" class="hud-btn hud-top-left" aria-label="Settings">⚙️</button>
-      <button id="btn-draw" class="hud-btn hud-bottom-left" aria-label="Draw mode" type="button">✏️</button>
-      <div id="draw-toolbar" class="draw-toolbar hidden" aria-label="Drawing tools">
-        <button id="btn-draw-pen" class="draw-tool-btn active" type="button" aria-label="Pen">✏️</button>
-        <button id="btn-draw-eraser" class="draw-tool-btn" type="button" aria-label="Eraser">🧽</button>
-        <input id="draw-color" class="draw-color-input" type="color" value="#ffffff" aria-label="Drawing color" />
+      <div class="play-menu-bar" aria-label="Play controls">
+        <label class="game-picker" for="game-select">
+          <span>Game</span>
+          <select id="game-select" aria-label="Choose game">
+            <option value="free-play">Free play</option>
+            <option value="more-games" disabled>More soon</option>
+          </select>
+        </label>
+        <button id="btn-camera" class="menu-icon-btn" aria-label="Camera" type="button">📹</button>
+        <button id="btn-mic" class="menu-icon-btn" aria-label="Record voice" type="button">🎤</button>
+        <button id="btn-chat" class="menu-icon-btn" aria-label="Chat" type="button">
+          💬<span id="chat-badge" class="badge hidden">0</span>
+        </button>
+        <button id="btn-profile" class="menu-icon-btn menu-settings-btn" aria-label="Settings" type="button">⚙️</button>
       </div>
-      <button id="btn-camera" class="hud-btn hud-bottom-right-3" aria-label="Camera" type="button">📹</button>
-      <button id="btn-mic"  class="hud-btn hud-bottom-right-2" aria-label="Record voice" type="button">🎤</button>
-      <button id="btn-chat" class="hud-btn hud-bottom-right"  aria-label="Chat">
-        💬<span id="chat-badge" class="badge hidden">0</span>
-      </button>
+      <div id="draw-dock" class="draw-dock" aria-label="Drawing tools">
+        <button id="btn-draw" class="draw-main-btn" aria-label="Draw mode" type="button">✏️</button>
+        <div id="draw-toolbar" class="draw-toolbar hidden" aria-label="Drawing tools">
+          <button id="btn-draw-pen" class="draw-tool-btn active" type="button" aria-label="Pen">✏️</button>
+          <button id="btn-draw-highlighter" class="draw-tool-btn" type="button" aria-label="Highlighter">🖍️</button>
+          <button id="btn-draw-eraser" class="draw-tool-btn" type="button" aria-label="Eraser">🧽</button>
+          <button id="btn-draw-eyedropper" class="draw-tool-btn" type="button" aria-label="Eyedropper">💧</button>
+          <input id="draw-color" class="draw-color-input" type="color" value="#ffffff" aria-label="Drawing color" />
+          <label class="draw-size-control" for="draw-size" aria-label="Brush size">
+            <span>Size</span>
+            <input id="draw-size" type="range" min="1" max="28" step="1" value="4" />
+          </label>
+          <button id="btn-draw-undo" class="draw-tool-btn" type="button" aria-label="Undo">↶</button>
+          <button id="btn-draw-redo" class="draw-tool-btn" type="button" aria-label="Redo">↷</button>
+          <button id="btn-draw-clear" class="draw-tool-btn draw-clear-btn" type="button" aria-label="Clear all drawings">🗑️</button>
+        </div>
+      </div>
+      <div id="video-tray" class="video-tray" aria-live="polite"></div>
+      <canvas id="stage"></canvas>
     </section>
 
   </div>
@@ -110,9 +130,8 @@
       <div class="field-group app-update-group">
           <label>App</label>
           <div class="version-row">
-              <span>Version <strong id="app-version">2.0.4</strong></span>
+              <span>Version <strong id="app-version">2.0.9</strong></span>
               <button id="btn-check-update" class="btn btn-small" type="button">Check for updates</button>
-              <button id="btn-clear-drawing" class="btn btn-small btn-danger" type="button">Clear drawings</button>
               <button id="btn-leave-lobby" class="btn btn-small btn-danger" type="button">Leave lobby</button>
           </div>
           <p id="update-status" class="status"></p>
