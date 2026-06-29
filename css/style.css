@@ -254,6 +254,7 @@ html, body {
 .draw-toolbar {
   display: flex;
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 6px;
@@ -262,7 +263,6 @@ html, body {
   backdrop-filter: blur(6px);
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
   max-width: calc(100vw - 80px);
-  overflow-x: auto;
 }
 
 .draw-tool-btn {
