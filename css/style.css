@@ -154,8 +154,14 @@ html, body {
   position: fixed;
 }
 .hud-btn:active { transform: scale(0.92); }
-.hud-top-left    { top: 16px; left: 16px; }
-.hud-bottom-right { bottom: 28px; right: 16px; }
+.hud-top-left      { top: 16px; left: 16px; }
+.hud-bottom-right  { bottom: 28px; right: 16px; }
+.hud-bottom-right-2 { bottom: 28px; right: 76px; } /* 16 + 48 + 12 gap */
+
+.hud-btn.recording {
+  background: rgba(255, 93, 93, 0.88);
+  animation: ptt-pulse 1s ease-in-out infinite;
+}
 
 .badge {
   position: absolute;

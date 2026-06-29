@@ -470,9 +470,9 @@ function stopRecording() {
 }
 
 function setPttRecording() {
-  const btn   = $("#btn-ptt");
+  $("#btn-ptt").classList.add("recording");
+  $("#btn-mic").classList.add("recording");
   const label = $("#ptt-label");
-  btn.classList.add("recording");
   recTickInterval = setInterval(() => {
     if (label) label.textContent = "Recording " + fmtDur((Date.now() - recStart) / 1000);
   }, 200);
@@ -480,9 +480,9 @@ function setPttRecording() {
 
 function setPttIdle() {
   clearInterval(recTickInterval);
-  const btn   = $("#btn-ptt");
+  $("#btn-ptt").classList.remove("recording");
+  $("#btn-mic").classList.remove("recording");
   const label = $("#ptt-label");
-  btn.classList.remove("recording");
   if (label) label.textContent = "Hold to talk";
 }
 
@@ -536,14 +536,17 @@ function receiveVoiceMessage(msg) {
   new Audio(url).play().catch(() => {});
 }
 
-// PTT button events.
-const pttBtn = $("#btn-ptt");
-pttBtn.addEventListener("mousedown",   (e) => { e.preventDefault(); startRecording(); });
-pttBtn.addEventListener("mouseup",     stopRecording);
-pttBtn.addEventListener("mouseleave",  stopRecording);
-pttBtn.addEventListener("touchstart",  (e) => { e.preventDefault(); startRecording(); }, { passive: false });
-pttBtn.addEventListener("touchend",    (e) => { e.preventDefault(); stopRecording(); },  { passive: false });
-pttBtn.addEventListener("touchcancel", stopRecording);
+// PTT events — shared handler for both the in-chat button and the HUD mic button.
+function attachPtt(btn) {
+  btn.addEventListener("mousedown",   (e) => { e.preventDefault(); startRecording(); });
+  btn.addEventListener("mouseup",     stopRecording);
+  btn.addEventListener("mouseleave",  stopRecording);
+  btn.addEventListener("touchstart",  (e) => { e.preventDefault(); startRecording(); }, { passive: false });
+  btn.addEventListener("touchend",    (e) => { e.preventDefault(); stopRecording(); },  { passive: false });
+  btn.addEventListener("touchcancel", stopRecording);
+}
+attachPtt($("#btn-ptt"));
+attachPtt($("#btn-mic"));
 
 // ============================================================ PROFILE UI ====
 let profileOpen = false;
