@@ -46,6 +46,7 @@ input, textarea, select {
 
 .title { font-size: 2.4rem; margin: 0; letter-spacing: -1px; }
 .title span { color: var(--accent); }
+.menu-version { color: var(--muted); font-size: 0.78rem; margin: -12px 0 0; }
 .tagline { color: var(--muted); margin: 0 0 12px; }
 
 /* ===== Buttons ===== */
@@ -461,7 +462,14 @@ input, textarea, select {
 .profile-preview-row {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 16px;
+}
+.profile-preview-main {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
 }
 .preview-dot {
   width: 58px;

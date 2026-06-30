@@ -17,6 +17,7 @@
     <section id="screen-menu" class="screen active">
       <button id="btn-menu-settings" class="hud-btn hud-top-left" aria-label="Settings">⚙️</button>
       <h1 class="title">browser<span>P2P</span></h1>
+      <p id="menu-version" class="menu-version"></p>
       <p class="tagline">Phone-to-phone over your Wi-Fi. Joining lobby…</p>
 
       <button id="btn-auto" class="btn btn-primary btn-big">Play</button>
@@ -99,8 +100,11 @@
           <button id="btn-close-profile" class="close-btn" aria-label="Close">✕</button>
       </div>
       <div class="profile-preview-row">
-          <div id="preview-dot" class="preview-dot"></div>
-          <span id="preview-name" class="preview-name"></span>
+          <div class="profile-preview-main">
+              <div id="preview-dot" class="preview-dot"></div>
+              <span id="preview-name" class="preview-name"></span>
+          </div>
+          <button id="btn-leave-lobby" class="btn btn-small btn-danger" type="button">Leave lobby</button>
       </div>
       <div class="field-group">
           <label for="input-name">Name</label>
@@ -136,7 +140,6 @@
           <div class="version-row">
               <span>Version <strong id="app-version">2.4.3</strong></span>
               <button id="btn-check-update" class="btn btn-small" type="button">Check for updates</button>
-              <button id="btn-leave-lobby" class="btn btn-small btn-danger" type="button">Leave lobby</button>
           </div>
           <p id="update-status" class="status"></p>
       </div>

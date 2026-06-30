@@ -2112,6 +2112,7 @@ $("#btn-profile").addEventListener("click", openProfileSheet);
 $("#btn-lobby-settings").addEventListener("click", openProfileSheet);
 $("#btn-menu-settings")?.addEventListener("click", openProfileSheet);
 $("#btn-close-profile").addEventListener("click", closeProfileSheet);
+$("#menu-version").textContent = `Version ${APP_VERSION}`;
 $("#app-version").textContent = APP_VERSION;
 $("#btn-check-update").addEventListener("click", checkForUpdates);
 $("#btn-leave-lobby").addEventListener("click", leaveLobby);
