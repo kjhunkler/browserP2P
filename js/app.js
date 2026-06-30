@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.1.8";
+const APP_VERSION = "2.2.1";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -428,11 +428,11 @@ function wireNetEvents() {
     pendingMigratedGameState = snapshotActiveGame("host migration snapshot") || loadSavedGameState(selectedGame)?.state || null;
     const remainingOrder = migratingFromHostId ? lastHostOrder.filter((id) => id !== migratingFromHostId) : [MY_ID];
     const myIndex = remainingOrder.indexOf(MY_ID);
-    if (myIndex < 0) return;
-    const delay = myIndex * 700;
+    const preferHost = myIndex === 0;
+    const delay = myIndex < 0 ? 300 : myIndex * 700;
     stopHostLoop();
     setTimeout(() => {
-      if (!hasLeftLobby) net.migrate(AUTO_CHANNEL, myIndex === 0);
+      if (!hasLeftLobby) net.migrate(AUTO_CHANNEL, preferHost);
     }, delay);
   });
 
@@ -1734,6 +1734,10 @@ function startPlaying(broadcast = true) {
 }
 
 function enterDefaultLobby() {
+  if (!net.peer && !net.hostConn && !net.isHost) {
+    net = new PeerNet();
+    wireNetEvents();
+  }
   hasLeftLobby = false;
   autoMode = true;
   renderLobby();

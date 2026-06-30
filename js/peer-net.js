@@ -276,6 +276,9 @@ class PeerNet {
     this._closed = true;
     if (this.peer) this.peer.destroy();
     this.peer = null;
+    this.isHost = false;
+    this.code = null;
+    this._autoId = null;
     this.conns.clear();
     this.mediaCalls.clear();
     this.hostConn = null;

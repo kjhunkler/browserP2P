@@ -159,6 +159,8 @@
       if (!tile) {
         tile = genTile(x, y);
         world.set(k, tile);
+        dirtyTiles.add(k);
+        lastFullSnapshotDirty = true;
       }
       if (y > generatedMaxY && x >= -1 && x <= COLS) generatedMaxY = y;
       return tile;
@@ -1069,20 +1071,30 @@
       const endRow = Math.ceil((H - offY()) / cell) + 1;
       for (let y = startRow; y <= endRow; y++) {
         for (let x = startCol; x <= endCol; x++) {
+          const sx = screenX(x);
+          const sy = screenY(y);
+          if (y < SURFACE_Y) continue;
+          if (y === SURFACE_Y) {
+            if (x >= 0 && x < COLS) {
+              ctx.fillStyle = "#3f8a45";
+              ctx.fillRect(sx, sy, cell + 1, cell + 1);
+              ctx.fillStyle = "#357a3c";
+              ctx.fillRect(sx, sy, cell + 1, Math.max(3, cell * 0.24));
+            }
+            continue;
+          }
           const t = isHost() ? tileAt(x, y) : world.get(key(x, y)) || { type: T.BEDROCK, loot: 0 };
-          if (t.type === T.EMPTY || t.type === T.LADDER) drawCavernBackground(x, y, screenX(x), screenY(y), cell);
-          drawTile(t.type, screenX(x), screenY(y), cell);
+          if (t.type === T.EMPTY || t.type === T.LADDER) drawCavernBackground(x, y, sx, sy, cell);
+          drawTile(t.type, sx, sy, cell);
           if (t.loot && t.type !== T.EMPTY) {
             ctx.fillStyle = t.loot >= LOOT.gem ? "#65d6ff" : "#ffd35a";
-            ctx.beginPath(); ctx.arc(screenX(x) + cell * 0.72, screenY(y) + cell * 0.32, Math.max(3, cell * 0.08), 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(sx + cell * 0.72, sy + cell * 0.32, Math.max(3, cell * 0.08), 0, Math.PI * 2); ctx.fill();
           }
         }
       }
       drawMiningOverlays();
       drawParticles();
 
-      ctx.fillStyle = "#56aa45";
-      ctx.fillRect(0, screenY(SURFACE_Y + 1) - 5, W, 8);
       for (const m of miners.values()) drawMiner(m, me);
       drawHud(me);
       drawShop(me);
