@@ -15,6 +15,7 @@
   const MIN_FISH_Y = 0.48;
   const MAX_FISH_Y = 0.91;
   const FISH_EDGE_PAD = 0.06;
+  const MIN_VISIBLE_FISH = 36;
   const FISH_TYPES = [
     { kind: "minnow", points: 2, w: 0.042, h: 0.020, colors: ["#9be7ff", "#c8f6ff", "#7ed6ff"], speed: 0.018 },
     { kind: "snapper", points: 7, w: 0.058, h: 0.030, colors: ["#ff7b7b", "#ffd166", "#f77f00"], speed: 0.016 },
@@ -153,6 +154,29 @@
         accent: choice(type.colors),
         phase: rand(0, Math.PI * 2),
       };
+    }
+
+    function isVisibleFish(f) {
+      return f && Number.isFinite(f.x) && Number.isFinite(f.y) && f.x >= FISH_EDGE_PAD && f.x <= 1 - FISH_EDGE_PAD && f.y >= MIN_FISH_Y && f.y <= MAX_FISH_Y;
+    }
+
+    function normalizeFish(f) {
+      const fresh = spawnFish();
+      return {
+        ...fresh,
+        ...f,
+        x: Number.isFinite(f?.x) ? clamp(f.x, FISH_EDGE_PAD, 1 - FISH_EDGE_PAD) : fresh.x,
+        y: Number.isFinite(f?.y) ? clamp(f.y, MIN_FISH_Y, MAX_FISH_Y) : fresh.y,
+        w: Number.isFinite(f?.w) ? clamp(f.w, 0.030, 0.105) : fresh.w,
+        h: Number.isFinite(f?.h) ? clamp(f.h, 0.016, 0.055) : fresh.h,
+        vx: Number.isFinite(f?.vx) && Math.abs(f.vx) > 0.001 ? clamp(f.vx, -0.035, 0.035) : fresh.vx,
+        vy: Number.isFinite(f?.vy) ? clamp(f.vy, -0.006, 0.006) : fresh.vy,
+      };
+    }
+
+    function ensureFishPopulation() {
+      state.fish = (state.fish || []).map(normalizeFish).filter(isVisibleFish);
+      while (state.fish.length < MAX_FISH) state.fish.push(spawnFish());
     }
 
     function spawnSnag() {
@@ -418,7 +442,7 @@
       state.t += dt;
       state.boatX = 0.5 + Math.sin(state.t * 0.11) * 0.08;
       syncPlayerList();
-      while (state.fish.length < MAX_FISH) state.fish.push(spawnFish());
+      ensureFishPopulation();
       while (state.snags.length < MAX_SNAGS) state.snags.push(spawnSnag());
       updateFish(dt);
       for (const [id, p] of Object.entries(state.players)) updateHook(id, p, dt);
@@ -444,6 +468,7 @@
       state.boatX = s.boatX ?? 0.5;
       state.players = { ...(s.players || {}) };
       state.fish = (s.fish || []).map((f) => ({ ...f }));
+      if (isHost() || state.fish.filter(isVisibleFish).length < MIN_VISIBLE_FISH) ensureFishPopulation();
       state.snags = (s.snags || []).map((x) => ({ ...x }));
       state.scores = { ...(s.scores || {}) };
       state.combo = { ...(s.combo || {}) };
@@ -523,7 +548,7 @@
     }
 
     function drawFish(f) {
-      if (f.y < WATER_SURFACE_Y + f.h * 0.9) return;
+      if (!isVisibleFish(f) || f.y < WATER_SURFACE_Y + f.h * 0.9) return;
       const x = sx(f.x);
       const y = sy(f.y);
       const scale = Math.min(canvas.clientWidth, canvas.clientHeight);
@@ -542,6 +567,9 @@
       drawPixelRect(x + dir * w * 0.26, y - h * 0.22, w * 0.20, h * 0.44, f.color);
       drawPixelRect(x + dir * w * 0.34, y - h * 0.10, Math.max(3, w * 0.07), Math.max(3, h * 0.14), "#07111f");
       drawPixelRect(x - w * 0.16, y - h * 0.05, w * 0.22, Math.max(2, h * 0.10), "rgba(255,255,255,0.28)");
+      ctx.strokeStyle = "rgba(255,255,255,0.42)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(Math.round(x - w * 0.58), Math.round(y - h * 0.50), Math.round(w * 1.12), Math.round(h * 1.06));
       if (f.kind === "jelly") {
         drawPixelRect(x - w * 0.30, y - h * 0.38, w * 0.60, h * 0.42, f.color);
         for (let i = -2; i <= 2; i++) drawPixelRect(x + i * w * 0.12, y + h * 0.04, 4, h * 0.70, f.accent);
