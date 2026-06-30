@@ -130,21 +130,20 @@
 
     function makeTiles() {
       const names = BLOSSOMS.map((b) => b.key);
-      const tiles = [];
-      for (let i = 0; i < TILE_COUNT; i++) {
-        const step = (i % 2) + 1;
-        const start = (i * 3 + Math.floor(i / 8)) % names.length;
-        const edges = [0, 1, 2, 3].map((n) => names[(start + n * step + Math.floor((i + n) / 7)) % names.length]);
-        while (new Set(edges).size < 4) {
-          const seen = new Set();
-          for (let e = 0; e < edges.length; e++) {
-            if (!seen.has(edges[e])) { seen.add(edges[e]); continue; }
-            edges[e] = names[(names.indexOf(edges[e]) + e + i + 1) % names.length];
-          }
-        }
-        tiles.push({ id: `rain-${String(i + 1).padStart(2, "0")}`, edges, motif: MOTIFS[i % MOTIFS.length] });
-      }
-      return tiles;
+      const edgeSets = [
+        [0, 1, 2, 3], [0, 2, 4, 6], [0, 3, 5, 7], [0, 4, 1, 5],
+        [1, 2, 3, 4], [1, 3, 5, 7], [1, 4, 6, 0], [1, 5, 2, 6],
+        [2, 3, 4, 5], [2, 4, 6, 0], [2, 5, 7, 1], [2, 6, 3, 7],
+        [3, 4, 5, 6], [3, 5, 7, 1], [3, 6, 0, 2], [3, 7, 4, 0],
+        [4, 5, 6, 7], [4, 6, 0, 2], [4, 7, 1, 3], [4, 0, 5, 1],
+        [5, 6, 7, 0], [5, 7, 1, 3], [5, 0, 2, 4], [5, 1, 6, 2],
+        [6, 7, 0, 1], [6, 0, 2, 4], [7, 0, 1, 2], [7, 1, 3, 5],
+      ];
+      return edgeSets.map((set, i) => {
+        const edges = set.map((n) => names[n]);
+        if (new Set(edges).size !== edges.length) throw new Error("A Gentle Rain tile has duplicate flower colors.");
+        return { id: `rain-${String(i + 1).padStart(2, "0")}`, edges, motif: MOTIFS[i % MOTIFS.length] };
+      });
     }
 
     function sortedPlayers() {
