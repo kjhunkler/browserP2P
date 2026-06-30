@@ -140,13 +140,14 @@ input, textarea, select {
 }
 
 /* ===== Play screen ===== */
-#screen-play { padding: 0; justify-content: flex-start; position: relative; }
+#screen-play { padding: 0; justify-content: flex-start; position: relative; gap:0; }
+#game-select > option {color:black;}
 #stage {
-  width: 100%;
-  flex: 1;
-  min-height: 0;
-  touch-action: none;
-  background: radial-gradient(circle at 50% 40%, #1e1e34, #0d0d18);
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    touch-action: none;
+    background: radial-gradient(circle at 50% 40%, #1e1e34, #0d0d18);
 }
 
 /* Play menu bar */
