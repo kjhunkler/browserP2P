@@ -183,6 +183,24 @@
       return ids;
     }
 
+    function canonicalTileMap() {
+      const tiles = new Map();
+      for (const tile of makeTiles()) tiles.set(tile.id, tile);
+      return tiles;
+    }
+
+    function tileAccountingKey() {
+      const keys = (obj) => Object.keys(obj || {}).sort();
+      return JSON.stringify({
+        deck: (state.deck || []).map((tile) => tile?.id || null),
+        hands: keys(state.hands).map((id) => [id, (state.hands[id] || []).map((tile) => tile?.id || null)]),
+        current: keys(state.currentByPlayer).map((id) => {
+          const current = state.currentByPlayer[id];
+          return [id, current?.tile?.id || null, current?.rot || 0];
+        }),
+      });
+    }
+
     function addLiveTile(pool, seen, placed, tile) {
       if (!tile?.id || seen.has(tile.id) || placed.has(tile.id)) return;
       seen.add(tile.id);
@@ -205,22 +223,7 @@
 
     function validateRemainingTiles() {
       if (!isHost()) return;
-      const ids = sortedPlayers();
-      if (!ids.length) return;
-      const pool = liveTilePool();
-      const activeNeedingTiles = ids.filter((id) => !state.currentByPlayer[id]?.tile && !state.over);
-      if (pool.length < activeNeedingTiles.length) {
-        checkEnd();
-        return;
-      }
-      let changed = false;
-      for (const id of ids) {
-        if (!state.currentByPlayer[id]?.tile && (state.hands[id]?.length || 0)) {
-          drawForPlayer(id);
-          changed = true;
-        }
-      }
-      if (!state.over && ids.some((id) => !playerTileCount(id))) checkEnd();
+      const changed = reconcileActivePlayerTiles();
       if (changed) host.broadcastState(makeSnapshot());
     }
 
@@ -245,10 +248,61 @@
       for (const id of ids) drawForPlayer(id);
     }
 
+    function dealAllRemainingToActivePlayers() {
+      const before = tileAccountingKey();
+      const ids = sortedPlayers();
+      const active = new Set(ids);
+      const canonical = canonicalTileMap();
+      const placed = placedTileIds();
+      const seen = new Set();
+      const pool = [];
+      const oldHands = state.hands || {};
+      const oldCurrentByPlayer = state.currentByPlayer || {};
+
+      function addTile(tile) {
+        if (!tile?.id || placed.has(tile.id) || seen.has(tile.id)) return;
+        const canonicalTile = canonical.get(tile.id);
+        if (!canonicalTile) return;
+        seen.add(tile.id);
+        pool.push(Array.isArray(tile.edges) ? tile : canonicalTile);
+      }
+
+      for (const id of ids) addTile(oldCurrentByPlayer[id]?.tile);
+      for (const id of ids) for (const tile of oldHands[id] || []) addTile(tile);
+      for (const [id, current] of Object.entries(oldCurrentByPlayer)) if (!active.has(id)) addTile(current?.tile);
+      for (const [id, hand] of Object.entries(oldHands)) if (!active.has(id)) for (const tile of hand || []) addTile(tile);
+      for (const tile of state.deck || []) addTile(tile);
+      for (const tile of canonical.values()) addTile(tile);
+
+      state.deck = [];
+      state.hands = {};
+      state.currentByPlayer = {};
+
+      if (!ids.length) {
+        state.deck = pool;
+        return before !== tileAccountingKey();
+      }
+
+      ids.forEach((id) => { state.hands[id] = []; });
+
+      for (const id of ids) {
+        const current = oldCurrentByPlayer[id];
+        const tileId = current?.tile?.id;
+        const index = pool.findIndex((tile) => tile.id === tileId);
+        if (index >= 0) state.currentByPlayer[id] = { tile: pool.splice(index, 1)[0], rot: current.rot || 0 };
+        else state.currentByPlayer[id] = null;
+      }
+
+      pool.forEach((tile, i) => state.hands[ids[i % ids.length]].push(tile));
+      for (const id of ids) drawForPlayer(id);
+      return before !== tileAccountingKey();
+    }
+
     function reconcileActivePlayerTiles() {
       if (!isHost()) return;
-      dealEvenly(liveTilePool());
+      const changed = dealAllRemainingToActivePlayers();
       checkEnd();
+      return changed;
     }
 
     function drawForPlayer(id) {
