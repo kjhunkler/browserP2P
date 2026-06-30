@@ -40,6 +40,10 @@
     let seenEventSeq = 0;
     let ui = { board: null, hand: null, handTile: null, rotate: null, deck: null, reset: null, cells: new Map(), scale: 1 };
     let drag = null;
+    let boardGesture = null;
+    let lastTapAt = 0;
+    const activePointers = new Map();
+    const view = { zoom: 1, rot: 0, panX: 0, panY: 0 };
     const events = [];
     const drops = [];
     const ripples = [];
@@ -418,6 +422,8 @@
       const cols = bounds.maxX - bounds.minX + 1;
       const rows = bounds.maxY - bounds.minY + 1;
       const cell = Math.max(24, Math.min(board.w / cols, board.h / rows));
+      const cx = board.x + board.w / 2 + view.panX;
+      const cy = board.y + board.h / 2 + view.panY;
       ui = {
         board,
         hand: { x: margin, y: H - handH + 10, w: W - margin * 2, h: handH - 18 },
@@ -428,16 +434,40 @@
         cells: new Map(),
         scale: cell,
         bounds,
+        view: { cx, cy, baseScale: cell, scale: cell * view.zoom, rot: view.rot },
       };
       return ui;
     }
 
     function gridToScreen(x, y) {
-      const { board, scale, bounds } = ui;
+      const { bounds } = ui;
+      const v = ui.view;
+      const gx = x - (bounds.minX + bounds.maxX + 1) / 2;
+      const gy = y - (bounds.minY + bounds.maxY + 1) / 2;
+      const c = Math.cos(v.rot), s = Math.sin(v.rot);
       return {
-        x: board.x + (x - bounds.minX) * scale + (board.w - (bounds.maxX - bounds.minX + 1) * scale) / 2,
-        y: board.y + (y - bounds.minY) * scale + (board.h - (bounds.maxY - bounds.minY + 1) * scale) / 2,
+        x: v.cx + (gx * c - gy * s) * v.scale,
+        y: v.cy + (gx * s + gy * c) * v.scale,
       };
+    }
+
+    function screenToGrid(px, py) {
+      const { bounds } = ui;
+      const v = ui.view;
+      const dx = (px - v.cx) / v.scale;
+      const dy = (py - v.cy) / v.scale;
+      const c = Math.cos(-v.rot), s = Math.sin(-v.rot);
+      return {
+        x: dx * c - dy * s + (bounds.minX + bounds.maxX + 1) / 2,
+        y: dx * s + dy * c + (bounds.minY + bounds.maxY + 1) / 2,
+      };
+    }
+
+    function resetBoardView() {
+      view.zoom = 1;
+      view.rot = 0;
+      view.panX = 0;
+      view.panY = 0;
     }
 
     function boardToNorm(x, y) {
@@ -450,8 +480,9 @@
     function pointIn(r, x, y) { return r && x >= r.x && y >= r.y && x <= r.x + r.w && y <= r.y + r.h; }
 
     function screenCell(px, py) {
-      for (const [k, r] of ui.cells) if (pointIn(r, px, py)) return parseKey(k);
-      return null;
+      const g = screenToGrid(px, py);
+      const p = { x: Math.floor(g.x), y: Math.floor(g.y) };
+      return ui.cells.has(key(p.x, p.y)) ? p : null;
     }
 
     function nearestEmptyCell(px, py, maxDist = Infinity) {
@@ -459,8 +490,8 @@
       let bestD = maxDist;
       for (const [k, r] of ui.cells) {
         if (state.board[k]) continue;
-        const cx = r.x + r.w / 2;
-        const cy = r.y + r.h / 2;
+        const cx = r.x;
+        const cy = r.y;
         const d = Math.hypot(px - cx, py - cy);
         if (d < bestD) { bestD = d; best = parseKey(k); }
       }
@@ -855,22 +886,26 @@
       for (const [k, cell] of entries) {
         const { x, y } = parseKey(k);
         const p = gridToScreen(x, y);
-        ui.cells.set(k, { x: p.x, y: p.y, w: ui.scale, h: ui.scale });
-        drawTile(cell.tile, cell.rot, p.x + 1, p.y + 1, ui.scale - 2, 1, cell.owner !== "system" ? cell.owner : null);
+        ui.cells.set(k, { x: p.x, y: p.y, w: ui.view.scale, h: ui.view.scale });
+        drawBoardTile(cell.tile, cell.rot, p.x, p.y, ui.view.scale - 2, 1, cell.owner !== "system" ? cell.owner : null);
       }
 
       for (const k of legal) {
         const { x, y } = parseKey(k);
         const p = gridToScreen(x, y);
-        ui.cells.set(k, { x: p.x, y: p.y, w: ui.scale, h: ui.scale });
+        ui.cells.set(k, { x: p.x, y: p.y, w: ui.view.scale, h: ui.view.scale });
         if (k !== hoverKey) continue;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(ui.view.rot);
         ctx.fillStyle = "rgba(211,255,244,0.26)";
         ctx.strokeStyle = "rgba(235,255,249,0.92)";
         ctx.lineWidth = 3;
-        drawRoundRect(p.x + 4, p.y + 4, ui.scale - 8, ui.scale - 8, ui.scale * 0.10);
+        drawRoundRect(-ui.view.scale / 2 + 4, -ui.view.scale / 2 + 4, ui.view.scale - 8, ui.view.scale - 8, ui.view.scale * 0.10);
         ctx.fill();
         ctx.stroke();
-        if (current?.tile) drawTile(current.tile, current.rot || 0, p.x + 1, p.y + 1, ui.scale - 2, 0.28, null);
+        ctx.restore();
+        if (current?.tile) drawBoardTile(current.tile, current.rot || 0, p.x, p.y, ui.view.scale - 2, 0.28, null);
       }
 
       for (const b of state.blossoms) {
@@ -888,6 +923,14 @@
         ctx.fillStyle = "#fff3bd";
         ctx.beginPath(); ctx.arc(p.x, p.y, r * 0.24, 0, Math.PI * 2); ctx.fill();
       }
+      ctx.restore();
+    }
+
+    function drawBoardTile(tile, rot, cx, cy, size, alpha, owner) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(ui.view.rot);
+      drawTile(tile, rot, -size / 2, -size / 2, size, alpha, owner);
       ctx.restore();
     }
 
@@ -1010,8 +1053,60 @@
       return { x: touch.clientX - r.left, y: touch.clientY - r.top };
     }
 
+    function eventPoint(e) {
+      if (e.offsetX !== undefined && e.offsetY !== undefined) return { x: e.offsetX, y: e.offsetY };
+      return pointerPoint(e);
+    }
+
+    function pointerEntry(e) {
+      const p = pointerPoint(e);
+      return { x: p.x, y: p.y };
+    }
+
+    function gestureMetrics(points) {
+      const a = points[0], b = points[1];
+      return {
+        cx: (a.x + b.x) / 2,
+        cy: (a.y + b.y) / 2,
+        dist: Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)),
+        angle: Math.atan2(b.y - a.y, b.x - a.x),
+      };
+    }
+
+    function startBoardGesture() {
+      if (drag) return;
+      const points = [...activePointers.values()];
+      if (!points.length) return;
+      if (points.length >= 2) {
+        const g = gestureMetrics(points);
+        boardGesture = { mode: "pinch", start: g, zoom: view.zoom, rot: view.rot, panX: view.panX, panY: view.panY };
+      } else {
+        const p = points[0];
+        boardGesture = { mode: "pan", x: p.x, y: p.y, panX: view.panX, panY: view.panY };
+      }
+    }
+
+    function updateBoardGesture() {
+      if (!boardGesture || drag) return;
+      const points = [...activePointers.values()];
+      if (points.length >= 2) {
+        if (boardGesture.mode !== "pinch") startBoardGesture();
+        const g = gestureMetrics(points);
+        view.zoom = clamp(boardGesture.zoom * (g.dist / boardGesture.start.dist), 0.55, 3.2);
+        view.rot = boardGesture.rot + g.angle - boardGesture.start.angle;
+        view.panX = boardGesture.panX + g.cx - boardGesture.start.cx;
+        view.panY = boardGesture.panY + g.cy - boardGesture.start.cy;
+      } else if (points.length === 1) {
+        if (boardGesture.mode !== "pan") startBoardGesture();
+        const p = points[0];
+        view.panX = boardGesture.panX + p.x - boardGesture.x;
+        view.panY = boardGesture.panY + p.y - boardGesture.y;
+      }
+    }
+
     function onPointerDown(e) {
       const p = pointerPoint(e);
+      activePointers.set(e.pointerId ?? "mouse", pointerEntry(e));
       if (drag && activePointerId !== null && e.pointerId !== activePointerId) {
         e.preventDefault();
         rotateCurrent();
@@ -1028,21 +1123,34 @@
         drag = { tile: current.tile, rot: current.rot || 0, x: p.x, y: p.y, size: ui.handTile.w, hover: null };
         return;
       }
+      if (pointIn(ui.board, p.x, p.y)) {
+        e.preventDefault();
+        const t = now();
+        if (t - lastTapAt < 320) resetBoardView();
+        lastTapAt = t;
+        startBoardGesture();
+      }
     }
 
     function onPointerMove(e) {
-      if (!drag) return;
+      if (activePointers.has(e.pointerId ?? "mouse")) activePointers.set(e.pointerId ?? "mouse", pointerEntry(e));
+      if (!drag) {
+        updateBoardGesture();
+        if (boardGesture) e.preventDefault();
+        return;
+      }
       if (activePointerId !== null && e.pointerId !== undefined && e.pointerId !== activePointerId) return;
       e.preventDefault();
       const p = pointerPoint(e);
       drag.x = p.x;
       drag.y = p.y;
-      drag.hover = nearestEmptyCell(p.x, p.y, ui.scale * 0.36);
+      drag.hover = nearestEmptyCell(p.x, p.y, ui.view.scale * 0.46);
     }
 
     function onPointerUp(e) {
       if (drag && activePointerId !== null && e.pointerId !== undefined && e.pointerId !== activePointerId) {
         e.preventDefault();
+        activePointers.delete(e.pointerId ?? "mouse");
         return;
       }
       const hover = drag?.hover;
@@ -1050,17 +1158,37 @@
       drag = null;
       if (activePointerId !== null && canvas.hasPointerCapture?.(activePointerId)) canvas.releasePointerCapture(activePointerId);
       activePointerId = null;
+      activePointers.delete(e.pointerId ?? "mouse");
+      if (!activePointers.size) boardGesture = null;
+      else startBoardGesture();
     }
 
     function onKeyDown(e) {
       if (e.key === "r" || e.key === "R" || e.key === " ") { e.preventDefault(); rotateCurrent(); }
       else if (e.key === "d" || e.key === "D") { e.preventDefault(); sendAction({ type: "swap" }); }
+      else if (e.key === "q" || e.key === "Q") { e.preventDefault(); view.rot -= Math.PI / 12; }
+      else if (e.key === "e" || e.key === "E") { e.preventDefault(); view.rot += Math.PI / 12; }
+      else if (e.key === "0") { e.preventDefault(); resetBoardView(); }
     }
 
     function onContextMenu(e) {
       if (!drag && !currentFor()?.tile) return;
       e.preventDefault();
       rotateCurrent();
+    }
+
+    function onWheel(e) {
+      const p = eventPoint(e);
+      if (!pointIn(ui.board, p.x, p.y) || drag) return;
+      e.preventDefault();
+      const oldZoom = view.zoom;
+      const nextZoom = clamp(view.zoom * Math.exp(-e.deltaY * 0.0014), 0.55, 3.2);
+      const k = nextZoom / oldZoom;
+      const cx = ui.board.x + ui.board.w / 2;
+      const cy = ui.board.y + ui.board.h / 2;
+      view.panX = p.x - cx - (p.x - cx - view.panX) * k;
+      view.panY = p.y - cy - (p.y - cy - view.panY) * k;
+      view.zoom = nextZoom;
     }
 
     function loop(ts) {
@@ -1089,6 +1217,7 @@
           canvas.addEventListener("pointercancel", onPointerUp);
           canvas.addEventListener("lostpointercapture", onPointerUp);
           canvas.addEventListener("contextmenu", onContextMenu);
+          canvas.addEventListener("wheel", onWheel, { passive: false });
         } else {
           canvas.addEventListener("touchstart", onPointerDown, { passive: false });
           window.addEventListener("touchmove", onPointerMove, { passive: false });
@@ -1098,6 +1227,7 @@
           window.addEventListener("mousemove", onPointerMove);
           window.addEventListener("mouseup", onPointerUp);
           canvas.addEventListener("contextmenu", onContextMenu);
+          canvas.addEventListener("wheel", onWheel, { passive: false });
         }
         window.addEventListener("keydown", onKeyDown);
         rafId = requestAnimationFrame(loop);
@@ -1114,6 +1244,7 @@
           canvas.removeEventListener("pointercancel", onPointerUp);
           canvas.removeEventListener("lostpointercapture", onPointerUp);
           canvas.removeEventListener("contextmenu", onContextMenu);
+          canvas.removeEventListener("wheel", onWheel);
         } else {
           canvas.removeEventListener("touchstart", onPointerDown);
           window.removeEventListener("touchmove", onPointerMove);
@@ -1123,6 +1254,7 @@
           window.removeEventListener("mousemove", onPointerMove);
           window.removeEventListener("mouseup", onPointerUp);
           canvas.removeEventListener("contextmenu", onContextMenu);
+          canvas.removeEventListener("wheel", onWheel);
         }
         window.removeEventListener("keydown", onKeyDown);
       },
