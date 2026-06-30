@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.2.8";
+const APP_VERSION = "2.2.9";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 
@@ -1059,6 +1059,7 @@ function sendGameState({ game, state, peerId = null, fullOnly = false }) {
 const GAME_SCRIPTS = {
   digger: "js/games/digger.js",
   "air-hockey": "js/games/air-hockey.js",
+  fishing: "js/games/fishing.js",
 };
 
 const loadingGameScripts = new Map();
