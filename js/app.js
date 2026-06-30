@@ -43,7 +43,9 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.2.1";
+const APP_VERSION = "2.2.3";
+const HOST_THROTTLE_DRIFT_MS = 1200;
+const HOST_THROTTLE_STRIKES = 2;
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -203,7 +205,7 @@ async function toggleKeepAwake() {
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") requestWakeLock();
-  if (document.visibilityState === "hidden") yieldHostForBackground();
+  if (document.visibilityState === "hidden") yieldHostForBackground("browser hidden");
   if (document.visibilityState === "visible") rejoinAfterYield();
 });
 
@@ -318,6 +320,8 @@ let keepPlayingAfterMigration = false;
 let yieldedHostForBackground = false;
 let pendingMigratedGameState = null;
 let playStarted = false;
+let hostLoopLastTick = 0;
+let hostThrottleStrikes = 0;
 
 // ============================================================ DOM ===========
 const $ = (sel) => document.querySelector(sel);
@@ -650,8 +654,19 @@ let lastHostOrder = [];
 function startHostLoop() {
   if (hostLoopRunning) return;
   hostLoopRunning = true;
+  hostLoopLastTick = performance.now();
+  hostThrottleStrikes = 0;
   hostLoopTimer = setInterval(() => {
     if (!hostLoopRunning || !net.isHost) return;
+    const tickNow = performance.now();
+    const drift = tickNow - hostLoopLastTick - (1000 / TICK_HZ);
+    hostLoopLastTick = tickNow;
+    if (drift > HOST_THROTTLE_DRIFT_MS) hostThrottleStrikes++;
+    else hostThrottleStrikes = 0;
+    if (hostThrottleStrikes >= HOST_THROTTLE_STRIKES) {
+      yieldHostForBackground("timer throttling");
+      return;
+    }
     const list = [...players.values()].map(p => ({
       id: p.id, name: p.name, color: p.color, icon: p.icon, x: p.x, y: p.y,
     }));
@@ -666,15 +681,18 @@ function stopHostLoop() {
   hostLoopRunning = false;
   clearInterval(hostLoopTimer);
   hostLoopTimer = null;
+  hostLoopLastTick = 0;
+  hostThrottleStrikes = 0;
 }
 
-function yieldHostForBackground() {
+function yieldHostForBackground(reason = "background") {
   if (!net.isHost || hasLeftLobby || !autoMode || yieldedHostForBackground) return;
   if (net.peerCount() === 0) return;
   yieldedHostForBackground = true;
   keepPlayingAfterMigration = screens.play.classList.contains("active");
   const state = snapshotActiveGame("yield host snapshot");
   if (state) saveGameState(selectedGame, state);
+  pushSys("Host handoff: " + reason);
   stopHostLoop();
   net.destroy();
   show(keepPlayingAfterMigration ? "play" : "lobby");
