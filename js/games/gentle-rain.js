@@ -548,10 +548,10 @@
 
       drawMotif(tile.motif, x, y, size);
       drawCornerCutouts(x, y, size);
-      drawEdgeFlower(x + size / 2, y + size * 0.055, edges[0], 0, size);
-      drawEdgeFlower(x + size * 0.945, y + size / 2, edges[1], Math.PI / 2, size);
-      drawEdgeFlower(x + size / 2, y + size * 0.945, edges[2], Math.PI, size);
-      drawEdgeFlower(x + size * 0.055, y + size / 2, edges[3], -Math.PI / 2, size);
+      drawEdgeFlower(x + size / 2, y, edges[0], 0, size);
+      drawEdgeFlower(x + size, y + size / 2, edges[1], Math.PI / 2, size);
+      drawEdgeFlower(x + size / 2, y + size, edges[2], Math.PI, size);
+      drawEdgeFlower(x, y + size / 2, edges[3], -Math.PI / 2, size);
       if (owner) {
         const p = profile(owner);
         ctx.fillStyle = p.color || "#ffffff";
@@ -632,12 +632,13 @@
       ctx.translate(cx, cy);
       ctx.rotate(angle);
       ctx.beginPath();
-      ctx.rect(-size * 0.18, 0, size * 0.36, size * 0.20);
+      ctx.rect(-size * 0.24, 0, size * 0.48, size * 0.24);
       ctx.clip();
-      for (let i = 0; i < def.petals; i++) {
-        const a = -Math.PI + (i + 0.5) * Math.PI / def.petals;
-        const px = Math.cos(a) * size * 0.055;
-        const py = Math.sin(a) * size * 0.055;
+      const visiblePetals = Math.max(4, Math.ceil(def.petals / 2) + 2);
+      for (let i = 0; i < visiblePetals; i++) {
+        const a = i * Math.PI / (visiblePetals - 1);
+        const px = Math.cos(a) * size * 0.068;
+        const py = Math.sin(a) * size * 0.068;
         ctx.save();
         ctx.translate(px, py);
         ctx.rotate(a + Math.PI / 2);
@@ -645,20 +646,26 @@
         ctx.strokeStyle = "rgba(255,255,255,0.68)";
         ctx.lineWidth = Math.max(0.7, size * 0.008);
         ctx.beginPath();
-        if (def.shape === "point") ctx.moveTo(0, -size * 0.010), ctx.quadraticCurveTo(size * 0.045, size * 0.035, 0, size * 0.105), ctx.quadraticCurveTo(-size * 0.045, size * 0.035, 0, -size * 0.010);
-        else if (def.shape === "heart") ctx.ellipse(0, size * 0.045, size * 0.040, size * 0.055, 0, 0, Math.PI * 2);
-        else if (def.shape === "wide") ctx.ellipse(0, size * 0.045, size * 0.052, size * 0.040, 0, 0, Math.PI * 2);
-        else ctx.ellipse(0, size * 0.052, size * 0.034, size * 0.072, 0, 0, Math.PI * 2);
+        if (def.shape === "point") ctx.moveTo(0, -size * 0.006), ctx.quadraticCurveTo(size * 0.047, size * 0.036, 0, size * 0.118), ctx.quadraticCurveTo(-size * 0.047, size * 0.036, 0, -size * 0.006);
+        else if (def.shape === "heart") ctx.ellipse(0, size * 0.050, size * 0.045, size * 0.060, 0, 0, Math.PI * 2);
+        else if (def.shape === "wide") ctx.ellipse(0, size * 0.048, size * 0.060, size * 0.044, 0, 0, Math.PI * 2);
+        else ctx.ellipse(0, size * 0.060, size * 0.038, size * 0.082, 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
         ctx.restore();
       }
       ctx.fillStyle = def.center;
       ctx.beginPath();
-      ctx.arc(0, 0, size * 0.040, 0, Math.PI * 2);
+      ctx.arc(0, 0, size * 0.046, 0, Math.PI * 2);
       ctx.fill();
       ctx.strokeStyle = "rgba(40,31,26,0.35)";
       ctx.lineWidth = Math.max(0.8, size * 0.007);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255,255,255,0.72)";
+      ctx.lineWidth = Math.max(1, size * 0.010);
+      ctx.beginPath();
+      ctx.moveTo(-size * 0.19, 0);
+      ctx.lineTo(size * 0.19, 0);
       ctx.stroke();
       ctx.restore();
     }
