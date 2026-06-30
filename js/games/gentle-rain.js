@@ -607,7 +607,6 @@
         hand: { x: margin, y: H - handH + 10, w: W - margin * 2, h: handH - 18 },
         deck: { x: margin + 24, y: handTileY, w: handTileSize, h: handTileSize },
         handTile: { x: W - margin - handTileSize - 24, y: handTileY, w: handTileSize, h: handTileSize },
-        reset: { x: margin, y: 52, w: 84, h: 32 },
         cells: new Map(),
         scale: cell,
         bounds,
@@ -739,7 +738,6 @@
       ctx.font = "13px system-ui, sans-serif";
       ctx.fillStyle = "rgba(233,249,255,0.82)";
       ctx.fillText(`${Object.keys(state.used).length}/8 blossoms · ${remainingTiles()} tiles unplaced · score ${score()}`, W / 2, 64);
-      drawButton(ui.reset, "Reset", "#21495c", true);
       drawPlayerStrip(W);
     }
 
@@ -1155,22 +1153,6 @@
       ctx.restore();
     }
 
-    function drawButton(r, label, color, enabled = true) {
-      ctx.save();
-      ctx.globalAlpha = enabled ? 1 : 0.45;
-      ctx.fillStyle = color;
-      drawRoundRect(r.x, r.y, r.w, r.h, 14);
-      ctx.fill();
-      ctx.strokeStyle = "rgba(255,255,255,0.18)";
-      ctx.stroke();
-      ctx.fillStyle = "#effcff";
-      ctx.font = "800 13px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2);
-      ctx.restore();
-    }
-
     function drawHand(W) {
       const h = ui.hand;
       ctx.fillStyle = "rgba(8,20,30,0.52)";
@@ -1188,11 +1170,6 @@
         drawAnimatedActiveTile(current.tile, current.rot || 0, ui.handTile.x, ui.handTile.y, size);
       } else {
         drawHandTileSlot(false);
-        ctx.font = "700 18px Georgia, serif";
-        ctx.fillStyle = state.won ? "#d3fff4" : "#d9eaff";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(state.won ? "The lake is blooming." : "No active tile.", ui.handTile.x + ui.handTile.w / 2, ui.handTile.y + ui.handTile.h / 2);
       }
 
       drawDeckStack();
@@ -1379,7 +1356,6 @@
         activePointers.delete(pointerId);
         return;
       }
-      if (pointIn(ui.reset, p.x, p.y)) { e.preventDefault(); sendAction({ type: "reset" }); return; }
       if (pointIn(ui.deck, p.x, p.y)) { e.preventDefault(); sendAction({ type: "swap" }); return; }
       const current = currentFor();
       if (current?.tile && pointIn(ui.handTile, p.x, p.y)) {
