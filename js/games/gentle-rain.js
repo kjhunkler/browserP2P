@@ -5,6 +5,8 @@
   "use strict";
 
   const SNAPSHOT_HZ = 12;
+  const PERF_LOG_INTERVAL_MS = 5000;
+  const TILE_VALIDATION_INTERVAL_MS = 2400;
   const TILE_COUNT = 28;
   const BLOSSOMS = [
     { key: "lotus", name: "Rose Lotus", color: "#f4a6cf", center: "#ffe5a8", petals: 8, design: "lotus" },
@@ -32,14 +34,18 @@
     let rafId = 0;
     let lastTs = 0;
     let lastSnapshotAt = 0;
+    let lastPerfLogAt = 0;
+    let lastValidationAt = 0;
     let lastCssWidth = 0;
     let lastCssHeight = 0;
     let activePointerId = null;
     let audioCtx = null;
     let eventSeq = 0;
     let seenEventSeq = 0;
-    let ui = { board: null, hand: null, handTile: null, rotate: null, deck: null, reset: null, cells: new Map(), scale: 1 };
+    let ui = { board: null, hand: null, handTile: null, deck: null, reset: null, cells: new Map(), scale: 1 };
     let drag = null;
+    let rotateAnim = null;
+    let drawAnim = null;
     let boardGesture = null;
     let lastTapAt = 0;
     const activePointers = new Map();
@@ -48,6 +54,7 @@
     const drops = [];
     const ripples = [];
     const particles = [];
+    const perf = { frames: 0, drawMs: 0, effectsMs: 0, snapshotMs: 0, snapshots: 0 };
 
     const state = {
       board: {},
@@ -65,6 +72,7 @@
 
     function isHost() { return !!host.isHost(); }
     function now() { return performance.now(); }
+    function hasRemotePeers() { return host.getPlayers().some((p) => p.id !== myId); }
     function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
     function rand(min, max) { return min + Math.random() * (max - min); }
     function key(x, y) { return `${x},${y}`; }
@@ -174,6 +182,31 @@
       for (const hand of Object.values(state.hands)) for (const tile of hand || []) addLiveTile(pool, seen, placed, tile);
       for (const current of Object.values(state.currentByPlayer)) addLiveTile(pool, seen, placed, current?.tile);
       return pool;
+    }
+
+    function playerTileCount(id) {
+      return (state.hands[id]?.length || 0) + (state.currentByPlayer[id]?.tile ? 1 : 0);
+    }
+
+    function validateRemainingTiles() {
+      if (!isHost()) return;
+      const ids = sortedPlayers();
+      if (!ids.length) return;
+      const pool = liveTilePool();
+      const activeNeedingTiles = ids.filter((id) => !state.currentByPlayer[id]?.tile && !state.over);
+      if (pool.length < activeNeedingTiles.length) {
+        checkEnd();
+        return;
+      }
+      let changed = false;
+      for (const id of ids) {
+        if (!state.currentByPlayer[id]?.tile && (state.hands[id]?.length || 0)) {
+          drawForPlayer(id);
+          changed = true;
+        }
+      }
+      if (!state.over && ids.some((id) => !playerTileCount(id))) checkEnd();
+      if (changed) host.broadcastState(makeSnapshot());
     }
 
     function dealEvenly(pool = liveTilePool()) {
@@ -336,16 +369,32 @@
       emitEvent("draw", 0.18, 0.84, "#b7d7ff");
     }
 
+    function easeOutCubic(t) { return 1 - Math.pow(1 - clamp(t, 0, 1), 3); }
+
+    function startRotateAnimation(tile, fromRot, toRot) {
+      if (!tile) return;
+      rotateAnim = { tileId: tile.id, start: now(), duration: 260, from: fromRot || 0, to: toRot || 0 };
+    }
+
+    function startDrawAnimation(tile) {
+      if (!tile || !ui.deck || !ui.handTile) return;
+      drawAnim = { tileId: tile.id, start: now(), duration: 420 };
+    }
+
     function handleAction(id, input) {
       if (!isHost() || !input || typeof input !== "object") return;
       if (input.type === "rotate" && currentFor(id) && !state.over) {
         const current = currentFor(id);
+        const fromRot = current.rot || 0;
         current.rot = ((current.rot || 0) + 1) % 4;
         state.message = "The tile turns softly in your hands.";
+        if (id === myId) startRotateAnimation(current.tile, fromRot, current.rot || 0);
       } else if (input.type === "place") {
         placeTile(id, Math.round(input.x), Math.round(input.y));
+        if (id === myId) startDrawAnimation(currentFor(id)?.tile);
       } else if (input.type === "swap") {
         swapTile(id);
+        if (id === myId) startDrawAnimation(currentFor(id)?.tile);
       } else if (input.type === "reset") {
         resetHostState();
       }
@@ -361,7 +410,9 @@
       const current = currentFor();
       if (!current?.tile || state.over) return;
       if (!isHost()) {
+        const fromRot = current.rot || 0;
         current.rot = ((current.rot || 0) + 1) % 4;
+        startRotateAnimation(current.tile, fromRot, current.rot || 0);
         if (drag?.tile === current.tile) drag.rot = current.rot;
       }
       sendAction({ type: "rotate" });
@@ -392,6 +443,35 @@
     }
 
     function currentSnapshot() { return makeSnapshot(); }
+
+    function timedSnapshot() {
+      const start = now();
+      const snapshot = makeSnapshot();
+      perf.snapshotMs += now() - start;
+      perf.snapshots++;
+      return snapshot;
+    }
+
+    function logPerf(ts) {
+      if (ts - lastPerfLogAt < PERF_LOG_INTERVAL_MS) return;
+      if (lastPerfLogAt) {
+        const seconds = (ts - lastPerfLogAt) / 1000;
+        console.debug("Gentle Rain perf", {
+          fps: Math.round(perf.frames / seconds),
+          drawMsPerFrame: +(perf.drawMs / Math.max(1, perf.frames)).toFixed(2),
+          effectsMsPerFrame: +(perf.effectsMs / Math.max(1, perf.frames)).toFixed(2),
+          snapshotMsPerSnapshot: +(perf.snapshotMs / Math.max(1, perf.snapshots)).toFixed(2),
+          snapshotsPerSecond: +(perf.snapshots / seconds).toFixed(1),
+          remotePeers: host.getPlayers().filter((p) => p.id !== myId).length,
+        });
+      }
+      lastPerfLogAt = ts;
+      perf.frames = 0;
+      perf.drawMs = 0;
+      perf.effectsMs = 0;
+      perf.snapshotMs = 0;
+      perf.snapshots = 0;
+    }
 
     function applySnapshot(snapshot) {
       if (!snapshot) return;
@@ -429,8 +509,9 @@
 
     function boardBounds() {
       const pts = Object.keys(state.board).map(parseKey);
-      const legal = legalCellsFor(currentFor());
-      for (const p of legal) pts.push(p);
+      for (const p of Object.keys(state.board).map(parseKey)) {
+        for (const d of DIRS) pts.push({ x: p.x + d.dx, y: p.y + d.dy });
+      }
       for (const b of state.blossoms) pts.push({ x: Math.floor(b.x), y: Math.floor(b.y) });
       if (!pts.length) return { minX: -2, maxX: 2, minY: -2, maxY: 2 };
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -442,8 +523,8 @@
     }
 
     function layout(W, H) {
-      const top = Math.max(88, Math.min(120, H * 0.18));
-      const handH = Math.max(142, Math.min(188, H * 0.25));
+      const top = Math.max(112, Math.min(144, H * 0.20));
+      const handH = Math.max(132, Math.min(168, H * 0.23));
       const margin = Math.max(12, Math.min(22, W * 0.04));
       const board = { x: margin, y: top, w: W - margin * 2, h: H - top - handH - margin };
       const bounds = boardBounds();
@@ -455,9 +536,8 @@
       ui = {
         board,
         hand: { x: margin, y: H - handH + 10, w: W - margin * 2, h: handH - 18 },
-        handTile: { x: margin + 22, y: H - handH + 70, w: Math.min(90, handH - 44), h: Math.min(90, handH - 44) },
-        rotate: { x: W - margin - 112, y: H - handH + 30, w: 104, h: 42 },
-        deck: { x: W - margin - 108, y: H - handH + 84, w: 92, h: 70 },
+        deck: { x: margin + 24, y: H - handH + 34, w: Math.min(104, handH - 28), h: Math.min(104, handH - 28) },
+        handTile: { x: W - margin - Math.min(104, handH - 28) - 24, y: H - handH + 34, w: Math.min(104, handH - 28), h: Math.min(104, handH - 28) },
         reset: { x: margin, y: 52, w: 84, h: 32 },
         cells: new Map(),
         scale: cell,
@@ -591,6 +671,34 @@
       ctx.fillStyle = "rgba(233,249,255,0.82)";
       ctx.fillText(`${Object.keys(state.used).length}/8 blossoms · ${remainingTiles()} tiles unplaced · score ${score()}`, W / 2, 64);
       drawButton(ui.reset, "Reset", "#21495c", true);
+      drawPlayerStrip(W);
+    }
+
+    function drawPlayerStrip(W) {
+      const players = host.getPlayers();
+      const totalW = Math.min(W - 120, players.length * 82);
+      let x = W / 2 - totalW / 2;
+      for (const p of players) {
+        const count = playerTileCount(p.id);
+        ctx.save();
+        ctx.fillStyle = p.id === myId ? "rgba(163,231,221,0.24)" : "rgba(8,20,30,0.36)";
+        drawRoundRect(x, 82, 72, 28, 14);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(216,242,255,0.16)";
+        ctx.stroke();
+        ctx.fillStyle = p.color || "#8ce8bc";
+        ctx.beginPath(); ctx.arc(x + 18, 96, 10, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#10202b";
+        ctx.font = "13px serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(p.icon || "●", x + 18, 96);
+        ctx.fillStyle = "#eafff8";
+        ctx.font = "800 13px system-ui, sans-serif";
+        ctx.fillText(String(count), x + 48, 96);
+        ctx.restore();
+        x += 82;
+      }
     }
 
     function drawTile(tile, rot, x, y, size, alpha = 1, owner = null) {
@@ -637,30 +745,54 @@
       ctx.restore();
     }
 
+    function drawTileBack(x, y, size, alpha = 1) {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      const grad = ctx.createLinearGradient(x, y, x + size, y + size);
+      grad.addColorStop(0, "#d6f3ee");
+      grad.addColorStop(0.45, "#7bb9bb");
+      grad.addColorStop(1, "#234c62");
+      ctx.fillStyle = grad;
+      drawRoundRect(x, y, size, size, size * 0.10);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.48)";
+      ctx.lineWidth = Math.max(1, size * 0.018);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(9,45,61,0.34)";
+      drawRoundRect(x + size * 0.11, y + size * 0.11, size * 0.78, size * 0.78, size * 0.08);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(234,255,248,0.50)";
+      ctx.lineWidth = Math.max(1, size * 0.014);
+      for (let i = 0; i < 4; i++) {
+        ctx.beginPath();
+        ctx.arc(x + size / 2, y + size / 2, size * (0.18 + i * 0.075), Math.PI * 0.18, Math.PI * 1.82);
+        ctx.stroke();
+      }
+      ctx.fillStyle = "rgba(255,255,255,0.72)";
+      ctx.font = `${Math.max(18, size * 0.28)}px serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("🌧️", x + size / 2, y + size / 2);
+      ctx.restore();
+    }
+
     function drawDeckStack() {
       const r = ui.deck;
       const count = (state.hands[myId]?.length || 0);
       const layers = Math.min(9, Math.max(1, count));
       ctx.save();
       for (let i = layers - 1; i >= 0; i--) {
-        const off = i * 2.4;
-        ctx.fillStyle = count ? "rgba(211,232,224,0.92)" : "rgba(83,108,114,0.45)";
-        drawRoundRect(r.x + off, r.y - off, r.w - 12, r.h - 10, 9);
-        ctx.fill();
-        ctx.strokeStyle = "rgba(255,255,255,0.22)";
-        ctx.stroke();
+        const off = i * 2.2;
+        drawTileBack(r.x + off, r.y - off, r.w - 14, count ? 0.92 : 0.34);
       }
-      ctx.fillStyle = "rgba(27,76,87,0.88)";
-      drawRoundRect(r.x + 10, r.y + 12, r.w - 28, r.h - 32, 7);
-      ctx.fill();
       ctx.fillStyle = "#eafff8";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.font = "900 18px system-ui, sans-serif";
-      ctx.fillText(String(count), r.x + r.w / 2 - 6, r.y + r.h / 2 - 2);
+      ctx.font = "900 20px system-ui, sans-serif";
+      ctx.fillText(String(count), r.x + r.w / 2 - 6, r.y + r.h / 2 - 4);
       ctx.font = "11px system-ui, sans-serif";
       ctx.fillStyle = "rgba(235,255,249,0.72)";
-      ctx.fillText("deck", r.x + r.w / 2 - 6, r.y + r.h - 8);
+      ctx.fillText("deck", r.x + r.w / 2 - 6, r.y + r.h + 8);
       ctx.restore();
     }
 
@@ -986,42 +1118,69 @@
       ctx.strokeStyle = "rgba(216,242,255,0.13)";
       ctx.stroke();
 
-      ctx.textAlign = "left";
+      ctx.textAlign = "center";
       ctx.textBaseline = "top";
       ctx.fillStyle = "rgba(239,252,255,0.88)";
-      ctx.font = "700 14px system-ui, sans-serif";
-      ctx.fillText(state.message, h.x + 18, h.y + 14, Math.max(180, h.w - 150));
-      ctx.font = "12px system-ui, sans-serif";
-      ctx.fillStyle = "rgba(223,246,255,0.62)";
-      ctx.fillText("Match touching flower halves. Finish a 2×2 pond opening to place a blossom.", h.x + 18, h.y + 38, Math.max(180, h.w - 150));
+      ctx.font = "700 13px system-ui, sans-serif";
+      ctx.fillText(state.message, h.x + h.w / 2, h.y + 12, Math.max(160, h.w - 220));
 
       const current = currentFor();
+      if (drag?.tile) drawHandTileSlot(true);
       if (current?.tile && !drag) {
         const size = ui.handTile.w;
-        drawTile(current.tile, current.rot || 0, ui.handTile.x, ui.handTile.y, size, 1, null);
+        drawAnimatedActiveTile(current.tile, current.rot || 0, ui.handTile.x, ui.handTile.y, size);
       } else {
+        drawHandTileSlot(false);
         ctx.font = "700 18px Georgia, serif";
         ctx.fillStyle = state.won ? "#d3fff4" : "#d9eaff";
-        ctx.fillText(state.won ? "The lake is blooming." : "No active tile.", h.x + 24, h.y + 78);
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(state.won ? "The lake is blooming." : "No active tile.", ui.handTile.x + ui.handTile.w / 2, ui.handTile.y + ui.handTile.h / 2);
       }
 
-      drawButton(ui.rotate, "Rotate", "#2f6674", !!current?.tile && !state.over);
       drawDeckStack();
-
-      const tokenX = h.x + Math.min(h.w - 148, 126);
-      const tokenY = h.y + h.h - 54;
-      for (let i = 0; i < BLOSSOMS.length; i++) {
-        const b = BLOSSOMS[i];
-        const x = tokenX + (i % 4) * 34;
-        const y = tokenY + Math.floor(i / 4) * 28;
-        ctx.globalAlpha = state.used[b.key] ? 1 : 0.32;
-        ctx.fillStyle = tileColor(b.key);
-        ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = "rgba(40,31,26,0.36)";
-        ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill();
-        ctx.globalAlpha = 1;
-      }
       if (drag?.tile) drawTile(drag.tile, drag.rot || 0, drag.x - drag.size / 2, drag.y - drag.size / 2, drag.size, 0.92, null);
+    }
+
+    function drawHandTileSlot(active) {
+      const r = ui.handTile;
+      ctx.save();
+      ctx.strokeStyle = active ? "rgba(235,255,249,0.76)" : "rgba(216,242,255,0.24)";
+      ctx.lineWidth = active ? 3 : 2;
+      ctx.setLineDash([8, 7]);
+      drawRoundRect(r.x, r.y, r.w, r.h, r.w * 0.10);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawAnimatedActiveTile(tile, rot, x, y, size) {
+      let drawRot = rot;
+      let scaleX = 1;
+      let alpha = 1;
+      if (rotateAnim?.tileId === tile.id) {
+        const t = (now() - rotateAnim.start) / rotateAnim.duration;
+        if (t >= 1) rotateAnim = null;
+        else drawRot = rotateAnim.from + (rotateAnim.to - rotateAnim.from || 1) * easeOutCubic(t);
+      }
+      if (drawAnim?.tileId === tile.id) {
+        const t = (now() - drawAnim.start) / drawAnim.duration;
+        if (t >= 1) drawAnim = null;
+        else {
+          const e = easeOutCubic(t);
+          const sx = ui.deck.x + ui.deck.w / 2 - size / 2;
+          const sy = ui.deck.y + ui.deck.h / 2 - size / 2;
+          x = sx + (x - sx) * e;
+          y = sy + (y - sy) * e;
+          scaleX = Math.abs(Math.cos(t * Math.PI));
+          alpha = 0.72 + e * 0.28;
+          if (t < 0.5) { drawTileBack(x, y, size, alpha); return; }
+        }
+      }
+      ctx.save();
+      ctx.translate(x + size / 2, y + size / 2);
+      ctx.scale(Math.max(0.14, scaleX), 1);
+      drawTile(tile, drawRot, -size / 2, -size / 2, size, alpha, null);
+      ctx.restore();
     }
 
     function updateEffects(dt, W, H) {
@@ -1141,14 +1300,13 @@
         return;
       }
       if (pointIn(ui.reset, p.x, p.y)) { e.preventDefault(); sendAction({ type: "reset" }); return; }
-      if (pointIn(ui.rotate, p.x, p.y)) { e.preventDefault(); rotateCurrent(); return; }
       if (pointIn(ui.deck, p.x, p.y)) { e.preventDefault(); sendAction({ type: "swap" }); return; }
       const current = currentFor();
       if (current?.tile && pointIn(ui.handTile, p.x, p.y)) {
         e.preventDefault();
         activePointerId = e.pointerId ?? null;
         canvas.setPointerCapture?.(activePointerId);
-        drag = { tile: current.tile, rot: current.rot || 0, x: p.x, y: p.y, size: ui.handTile.w, hover: null };
+        drag = { tile: current.tile, rot: current.rot || 0, x: p.x, y: p.y, startX: p.x, startY: p.y, size: Math.max(24, ui.view.scale - 2), hover: null };
         return;
       }
       if (pointIn(ui.board, p.x, p.y)) {
@@ -1172,7 +1330,7 @@
       const p = pointerPoint(e);
       drag.x = p.x;
       drag.y = p.y;
-      drag.hover = nearestEmptyCell(p.x, p.y, ui.view.scale * 0.46);
+      drag.hover = pointIn(ui.deck, p.x, p.y) ? null : nearestEmptyCell(p.x, p.y, ui.view.scale * 0.46);
     }
 
     function onPointerUp(e) {
@@ -1182,7 +1340,11 @@
         return;
       }
       const hover = drag?.hover;
-      if (hover && legalAt(hover.x, hover.y)) sendAction({ type: "place", x: hover.x, y: hover.y });
+      const p = pointerPoint(e);
+      const moved = drag ? Math.hypot(p.x - drag.startX, p.y - drag.startY) : 0;
+      if (drag && pointIn(ui.deck, p.x, p.y)) sendAction({ type: "swap" });
+      else if (hover && legalAt(hover.x, hover.y)) sendAction({ type: "place", x: hover.x, y: hover.y });
+      else if (drag && moved < 8 && pointIn(ui.handTile, p.x, p.y)) rotateCurrent();
       drag = null;
       if (activePointerId !== null && canvas.hasPointerCapture?.(activePointerId)) canvas.releasePointerCapture(activePointerId);
       activePointerId = null;
@@ -1224,12 +1386,22 @@
       if (!lastTs) lastTs = ts;
       const frameMs = ts - lastTs;
       lastTs = ts;
-      if (isHost() && ts - lastSnapshotAt >= 1000 / SNAPSHOT_HZ) {
+      if (isHost() && hasRemotePeers() && ts - lastSnapshotAt >= 1000 / SNAPSHOT_HZ) {
         lastSnapshotAt = ts;
-        host.broadcastState(makeSnapshot());
+        host.broadcastState(timedSnapshot());
       }
+      if (isHost() && ts - lastValidationAt >= TILE_VALIDATION_INTERVAL_MS) {
+        lastValidationAt = ts;
+        validateRemainingTiles();
+      }
+      const effectsStart = now();
       updateEffects(frameMs || 16, canvas.clientWidth, canvas.clientHeight);
+      perf.effectsMs += now() - effectsStart;
+      const drawStart = now();
       draw();
+      perf.drawMs += now() - drawStart;
+      perf.frames++;
+      logPerf(ts);
     }
 
     return {
