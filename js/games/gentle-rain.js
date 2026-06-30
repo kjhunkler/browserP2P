@@ -7,6 +7,7 @@
   const SNAPSHOT_HZ = 12;
   const PERF_LOG_INTERVAL_MS = 5000;
   const TILE_VALIDATION_INTERVAL_MS = 2400;
+  const ENJOYMENT_MESSAGE_CHANCE = 0.28;
   const TILE_COUNT = 28;
   const BLOSSOMS = [
     { key: "lotus", name: "Rose Lotus", color: "#f4a6cf", center: "#ffe5a8", petals: 8, design: "lotus" },
@@ -24,6 +25,20 @@
     { dx: 1, dy: 0, edge: 1, opp: 3 },
     { dx: 0, dy: 1, edge: 2, opp: 0 },
     { dx: -1, dy: 0, edge: 3, opp: 1 },
+  ];
+  const ENJOYMENT_MESSAGES = [
+    "A quiet ripple follows your touch.",
+    "The lake listens.",
+    "A koi turns beneath the rain.",
+    "Soft drops gather at the tile edge.",
+    "The garden breathes between turns.",
+    "A dragonfly waits out the shower.",
+    "The water brightens for a moment.",
+    "Lotus leaves tremble in the mist.",
+    "The next pattern is hiding in plain sight.",
+    "Rain beads shine on the pond stones.",
+    "A small wave carries your choice onward.",
+    "The blossoms are patient.",
   ];
 
   function create(host, initialState) {
@@ -369,6 +384,12 @@
       emitEvent("draw", 0.18, 0.84, "#b7d7ff");
     }
 
+    function maybeEnjoymentMessage() {
+      if (state.over || Math.random() > ENJOYMENT_MESSAGE_CHANCE) return;
+      const message = ENJOYMENT_MESSAGES[Math.floor(Math.random() * ENJOYMENT_MESSAGES.length)];
+      if (message && message !== state.message) state.message = message;
+    }
+
     function easeOutCubic(t) { return 1 - Math.pow(1 - clamp(t, 0, 1), 3); }
 
     function startDrawAnimation(tile) {
@@ -391,6 +412,7 @@
       } else if (input.type === "reset") {
         resetHostState();
       }
+      if (input.type === "rotate" || input.type === "place") maybeEnjoymentMessage();
       host.broadcastState(makeSnapshot());
     }
 
@@ -758,14 +780,9 @@
       ctx.lineWidth = Math.max(1, size * 0.014);
       for (let i = 0; i < 4; i++) {
         ctx.beginPath();
-        ctx.arc(x + size / 2, y + size / 2, size * (0.18 + i * 0.075), Math.PI * 0.18, Math.PI * 1.82);
+        ctx.arc(x + size / 2, y + size / 2, size * (0.16 + i * 0.066), Math.PI * 0.18, Math.PI * 1.82);
         ctx.stroke();
       }
-      ctx.fillStyle = "rgba(255,255,255,0.72)";
-      ctx.font = `${Math.max(18, size * 0.28)}px serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("🌧️", x + size / 2, y + size / 2);
       ctx.restore();
     }
 
@@ -1154,14 +1171,15 @@
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.font = "700 14px system-ui, sans-serif";
+      const maxWidth = Math.max(160, h.w - 48);
       if (oldAlpha > 0) {
         ctx.globalAlpha = oldAlpha;
         ctx.fillStyle = "rgba(239,252,255,0.88)";
-        ctx.fillText(handMessage.previous, h.x + h.w / 2, h.y + 26, Math.max(160, h.w - 220));
+        ctx.fillText(handMessage.previous, h.x + h.w / 2, h.y + 26, maxWidth);
       }
       ctx.globalAlpha = handMessage.changedAt ? newAlpha : 1;
       ctx.fillStyle = "rgba(239,252,255,0.88)";
-      ctx.fillText(handMessage.text, h.x + h.w / 2, h.y + 26, Math.max(160, h.w - 220));
+      ctx.fillText(handMessage.text, h.x + h.w / 2, h.y + 26, maxWidth);
       ctx.restore();
     }
 
