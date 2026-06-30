@@ -1059,9 +1059,9 @@ function sendGameState({ game, state, peerId = null, fullOnly = false }) {
 const GAME_SCRIPTS = {
   digger: "js/games/digger.js",
   "air-hockey": "js/games/air-hockey.js",
-  fishing: "js/games/fishing.js",
   "paint-panic": "js/games/paint-panic.js",
   tower: "js/games/tower.js",
+  "gentle-rain": "js/games/gentle-rain.js",
 };
 
 const loadingGameScripts = new Map();

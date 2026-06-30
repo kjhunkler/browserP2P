@@ -7,9 +7,9 @@ const APP_SHELL = [
   "./js/app.js",
   "./js/games/digger.js",
   "./js/games/air-hockey.js",
-  "./js/games/fishing.js",
   "./js/games/paint-panic.js",
   "./js/games/tower.js",
+  "./js/games/gentle-rain.js",
   "./js/peer-net.js",
   "./manifest.webmanifest",
   "./icons/robot.svg"
