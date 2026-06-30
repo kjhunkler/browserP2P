@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.2.3";
+const APP_VERSION = "2.2.5";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 
@@ -1024,6 +1024,9 @@ function gameHostApi() {
     isHost: () => net.isHost,
     getPlayers: () => net.isHost ? [...players.values()] : lastState,
     getProfile: (id) => profiles.get(id),
+    isSpeaking: (id) => speaking.has(id),
+    isCurrentHost: (id) => id && id === currentHostId(),
+    hostCrown,
     sendInput: (input) => {
       if (!activeGame || selectedGame === "free-play") return;
       net.send({ t: "game-input", game: selectedGame, input });
@@ -1051,6 +1054,7 @@ function sendGameState({ game, state, peerId = null, fullOnly = false }) {
 
 const GAME_SCRIPTS = {
   digger: "js/games/digger.js",
+  "air-hockey": "js/games/air-hockey.js",
 };
 
 const loadingGameScripts = new Map();

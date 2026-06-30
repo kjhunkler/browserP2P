@@ -958,6 +958,14 @@
     function drawMiner(m, me) {
       const x = screenX(m.x) + cell / 2;
       const y = screenY(m.y) + cell / 2;
+      if (host.isSpeaking?.(m.id)) {
+        const pulse = 0.5 + 0.5 * Math.abs(Math.sin(now() / 220));
+        ctx.beginPath();
+        ctx.arc(x, y, cell * (0.38 + pulse * 0.08), 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(124,252,155,${0.5 + 0.5 * pulse})`;
+        ctx.lineWidth = Math.max(3, cell * 0.06);
+        ctx.stroke();
+      }
       ctx.beginPath();
       ctx.arc(x, y, cell * 0.33, 0, Math.PI * 2);
       ctx.fillStyle = m.color || "#7cfc9b";
@@ -974,7 +982,7 @@
       ctx.fillText(m.icon || "⛏️", x, y + 1);
       ctx.font = "700 11px system-ui, sans-serif";
       ctx.fillStyle = "rgba(255,255,255,0.9)";
-      ctx.fillText(m.name || "Player", x, y - cell * 0.48);
+      ctx.fillText((host.hostCrown?.(m.id) || "") + (m.name || "Player"), x, y - cell * 0.48);
       if (m.dead) {
         ctx.fillStyle = "rgba(0,0,0,0.72)";
         ctx.fillRect(x - cell * 0.35, y - cell * 0.35, cell * 0.7, cell * 0.7);
