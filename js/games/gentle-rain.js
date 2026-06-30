@@ -7,14 +7,14 @@
   const SNAPSHOT_HZ = 12;
   const TILE_COUNT = 28;
   const BLOSSOMS = [
-    { key: "lotus", name: "Rose Lotus", color: "#f4a6cf", center: "#ffe5a8", petals: 7, shape: "round" },
-    { key: "iris", name: "Purple Iris", color: "#a993ff", center: "#fff0a8", petals: 5, shape: "point" },
-    { key: "lily", name: "Cream Lily", color: "#f7f0bd", center: "#f2b84b", petals: 6, shape: "long" },
-    { key: "mint", name: "Mint Clover", color: "#8ce8bc", center: "#fff7c7", petals: 4, shape: "heart" },
-    { key: "sky", name: "Blue Anemone", color: "#8ed8ff", center: "#263a76", petals: 8, shape: "round" },
-    { key: "coral", name: "Coral Poppy", color: "#ffb08a", center: "#5d3328", petals: 5, shape: "wide" },
-    { key: "violet", name: "Lilac Aster", color: "#d9a6ff", center: "#ffe28f", petals: 9, shape: "point" },
-    { key: "jade", name: "Jade Orchid", color: "#94d78d", center: "#f9ffd8", petals: 6, shape: "long" },
+    { key: "lotus", name: "Rose Lotus", color: "#f4a6cf", center: "#ffe5a8", petals: 8, design: "lotus" },
+    { key: "iris", name: "Purple Iris", color: "#a993ff", center: "#fff0a8", petals: 5, design: "iris" },
+    { key: "lily", name: "Cream Lily", color: "#f7f0bd", center: "#f2b84b", petals: 6, design: "lily" },
+    { key: "mint", name: "Mint Clover", color: "#8ce8bc", center: "#fff7c7", petals: 4, design: "clover" },
+    { key: "sky", name: "Blue Anemone", color: "#8ed8ff", center: "#263a76", petals: 10, design: "anemone" },
+    { key: "coral", name: "Coral Poppy", color: "#ffb08a", center: "#5d3328", petals: 5, design: "poppy" },
+    { key: "violet", name: "Lilac Aster", color: "#d9a6ff", center: "#ffe28f", petals: 12, design: "aster" },
+    { key: "jade", name: "Jade Orchid", color: "#94d78d", center: "#f9ffd8", petals: 6, design: "orchid" },
   ];
   const MOTIFS = ["lily", "koi", "duck", "reed", "ripple", "leaf"];
   const DIRS = [
@@ -634,39 +634,109 @@
       ctx.beginPath();
       ctx.rect(-size * 0.24, 0, size * 0.48, size * 0.24);
       ctx.clip();
-      const visiblePetals = Math.max(4, Math.ceil(def.petals / 2) + 2);
-      for (let i = 0; i < visiblePetals; i++) {
-        const a = i * Math.PI / (visiblePetals - 1);
-        const px = Math.cos(a) * size * 0.068;
-        const py = Math.sin(a) * size * 0.068;
-        ctx.save();
-        ctx.translate(px, py);
-        ctx.rotate(a + Math.PI / 2);
-        ctx.fillStyle = def.color;
-        ctx.strokeStyle = "rgba(255,255,255,0.68)";
-        ctx.lineWidth = Math.max(0.7, size * 0.008);
-        ctx.beginPath();
-        if (def.shape === "point") ctx.moveTo(0, -size * 0.006), ctx.quadraticCurveTo(size * 0.047, size * 0.036, 0, size * 0.118), ctx.quadraticCurveTo(-size * 0.047, size * 0.036, 0, -size * 0.006);
-        else if (def.shape === "heart") ctx.ellipse(0, size * 0.050, size * 0.045, size * 0.060, 0, 0, Math.PI * 2);
-        else if (def.shape === "wide") ctx.ellipse(0, size * 0.048, size * 0.060, size * 0.044, 0, 0, Math.PI * 2);
-        else ctx.ellipse(0, size * 0.060, size * 0.038, size * 0.082, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        ctx.restore();
-      }
+      drawFlowerPetals(def, size);
       ctx.fillStyle = def.center;
       ctx.beginPath();
-      ctx.arc(0, 0, size * 0.046, 0, Math.PI * 2);
+      if (def.design === "iris") ctx.ellipse(0, 0, size * 0.030, size * 0.055, 0, 0, Math.PI * 2);
+      else if (def.design === "orchid") ctx.ellipse(0, 0, size * 0.060, size * 0.034, 0, 0, Math.PI * 2);
+      else ctx.arc(0, 0, size * (def.design === "poppy" ? 0.058 : 0.046), 0, Math.PI * 2);
       ctx.fill();
       ctx.strokeStyle = "rgba(40,31,26,0.35)";
       ctx.lineWidth = Math.max(0.8, size * 0.007);
       ctx.stroke();
+      if (def.design === "anemone") drawStamens(size, 10, "#eaf6ff");
+      else if (def.design === "poppy") drawStamens(size, 7, "#2b1d1b");
+      else if (def.design === "aster") drawStamens(size, 9, "#fff4b5");
       ctx.strokeStyle = "rgba(255,255,255,0.72)";
       ctx.lineWidth = Math.max(1, size * 0.010);
       ctx.beginPath();
       ctx.moveTo(-size * 0.19, 0);
       ctx.lineTo(size * 0.19, 0);
       ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawFlowerPetals(def, size) {
+      if (def.design === "lotus") {
+        drawPetalFan(def, size, 7, 0.062, 0.120, "point", 0);
+        drawPetalFan(def, size, 5, 0.038, 0.087, "round", Math.PI / 7);
+      } else if (def.design === "iris") {
+        drawPetalAt(-0.13, 0.070, -0.52, size, def, 0.036, 0.135, "point");
+        drawPetalAt(0, 0.095, 0, size, def, 0.050, 0.160, "point");
+        drawPetalAt(0.13, 0.070, 0.52, size, def, 0.036, 0.135, "point");
+        drawPetalAt(-0.055, 0.030, -0.25, size, def, 0.050, 0.070, "wide");
+        drawPetalAt(0.055, 0.030, 0.25, size, def, 0.050, 0.070, "wide");
+      } else if (def.design === "lily") {
+        drawPetalFan(def, size, 6, 0.035, 0.165, "long", 0);
+        drawStamens(size, 4, "#c9852f", 0.09);
+      } else if (def.design === "clover") {
+        for (let i = 0; i < 4; i++) {
+          const a = i * Math.PI / 3;
+          drawPetalAt(Math.cos(a) * 0.055, Math.sin(a) * 0.055, a, size, def, 0.055, 0.065, "heart");
+        }
+      } else if (def.design === "anemone") {
+        drawPetalFan(def, size, 10, 0.030, 0.105, "round", 0);
+      } else if (def.design === "poppy") {
+        drawPetalFan(def, size, 5, 0.070, 0.090, "wide", Math.PI / 10);
+      } else if (def.design === "aster") {
+        drawPetalFan(def, size, 13, 0.018, 0.128, "needle", 0);
+      } else if (def.design === "orchid") {
+        drawPetalAt(0, 0.105, 0, size, def, 0.060, 0.135, "long");
+        drawPetalAt(-0.105, 0.060, -0.70, size, def, 0.046, 0.105, "long");
+        drawPetalAt(0.105, 0.060, 0.70, size, def, 0.046, 0.105, "long");
+        drawPetalAt(-0.045, 0.030, -0.22, size, def, 0.040, 0.070, "round");
+        drawPetalAt(0.045, 0.030, 0.22, size, def, 0.040, 0.070, "round");
+      }
+    }
+
+    function drawPetalFan(def, size, count, width, length, shape, offset) {
+      for (let i = 0; i < count; i++) {
+        const a = offset + i * Math.PI / Math.max(1, count - 1);
+        drawPetalAt(Math.cos(a) * 0.064, Math.sin(a) * 0.064, a, size, def, width, length, shape);
+      }
+    }
+
+    function drawPetalAt(nx, ny, angle, size, def, width, length, shape) {
+      ctx.save();
+      ctx.translate(nx * size, ny * size);
+      ctx.rotate(angle + Math.PI / 2);
+      ctx.fillStyle = def.color;
+      ctx.strokeStyle = "rgba(255,255,255,0.68)";
+      ctx.lineWidth = Math.max(0.7, size * 0.008);
+      ctx.beginPath();
+      if (shape === "point" || shape === "needle") {
+        ctx.moveTo(0, -length * size * 0.06);
+        ctx.quadraticCurveTo(width * size, length * size * 0.30, 0, length * size);
+        ctx.quadraticCurveTo(-width * size, length * size * 0.30, 0, -length * size * 0.06);
+      } else if (shape === "heart") {
+        ctx.moveTo(0, length * size);
+        ctx.bezierCurveTo(width * size, length * size * 0.72, width * size, length * size * 0.18, 0, length * size * 0.28);
+        ctx.bezierCurveTo(-width * size, length * size * 0.18, -width * size, length * size * 0.72, 0, length * size);
+      } else {
+        ctx.ellipse(0, length * size * 0.48, width * size, length * size * 0.52, 0, 0, Math.PI * 2);
+      }
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawStamens(size, count, color, length = 0.07) {
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = Math.max(0.8, size * 0.006);
+      for (let i = 0; i < count; i++) {
+        const a = (i + 0.5) * Math.PI / count;
+        const x = Math.cos(a) * size * length;
+        const y = Math.sin(a) * size * length;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y, size * 0.008, 0, Math.PI * 2);
+        ctx.fill();
+      }
       ctx.restore();
     }
 
