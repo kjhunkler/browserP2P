@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.3.2";
+const APP_VERSION = "2.3.3";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 
@@ -1060,6 +1060,7 @@ const GAME_SCRIPTS = {
   digger: "js/games/digger.js",
   "air-hockey": "js/games/air-hockey.js",
   fishing: "js/games/fishing.js",
+  "paint-panic": "js/games/paint-panic.js",
 };
 
 const loadingGameScripts = new Map();
