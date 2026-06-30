@@ -325,6 +325,17 @@
       else host.sendInput(input);
     }
 
+    function rotateCurrent() {
+      const current = currentFor();
+      if (!current?.tile || state.over) return;
+      if (!isHost()) {
+        current.rot = ((current.rot || 0) + 1) % 4;
+        if (drag?.tile === current.tile) drag.rot = current.rot;
+      }
+      sendAction({ type: "rotate" });
+      if (isHost() && drag?.tile === current.tile) drag.rot = current.rot || 0;
+    }
+
     function score() {
       const placed = Object.keys(state.used).length;
       return placed >= BLOSSOMS.length ? placed + remainingTiles() : placed;
@@ -1001,8 +1012,13 @@
 
     function onPointerDown(e) {
       const p = pointerPoint(e);
+      if (drag && activePointerId !== null && e.pointerId !== activePointerId) {
+        e.preventDefault();
+        rotateCurrent();
+        return;
+      }
       if (pointIn(ui.reset, p.x, p.y)) { e.preventDefault(); sendAction({ type: "reset" }); return; }
-      if (pointIn(ui.rotate, p.x, p.y)) { e.preventDefault(); sendAction({ type: "rotate" }); return; }
+      if (pointIn(ui.rotate, p.x, p.y)) { e.preventDefault(); rotateCurrent(); return; }
       if (pointIn(ui.deck, p.x, p.y)) { e.preventDefault(); sendAction({ type: "swap" }); return; }
       const current = currentFor();
       if (current?.tile && pointIn(ui.handTile, p.x, p.y)) {
@@ -1016,6 +1032,7 @@
 
     function onPointerMove(e) {
       if (!drag) return;
+      if (activePointerId !== null && e.pointerId !== undefined && e.pointerId !== activePointerId) return;
       e.preventDefault();
       const p = pointerPoint(e);
       drag.x = p.x;
@@ -1024,6 +1041,10 @@
     }
 
     function onPointerUp(e) {
+      if (drag && activePointerId !== null && e.pointerId !== undefined && e.pointerId !== activePointerId) {
+        e.preventDefault();
+        return;
+      }
       const hover = drag?.hover;
       if (hover && legalAt(hover.x, hover.y)) sendAction({ type: "place", x: hover.x, y: hover.y });
       drag = null;
@@ -1032,8 +1053,14 @@
     }
 
     function onKeyDown(e) {
-      if (e.key === "r" || e.key === "R" || e.key === " ") { e.preventDefault(); sendAction({ type: "rotate" }); }
+      if (e.key === "r" || e.key === "R" || e.key === " ") { e.preventDefault(); rotateCurrent(); }
       else if (e.key === "d" || e.key === "D") { e.preventDefault(); sendAction({ type: "swap" }); }
+    }
+
+    function onContextMenu(e) {
+      if (!drag && !currentFor()?.tile) return;
+      e.preventDefault();
+      rotateCurrent();
     }
 
     function loop(ts) {
@@ -1061,6 +1088,7 @@
           canvas.addEventListener("pointerup", onPointerUp);
           canvas.addEventListener("pointercancel", onPointerUp);
           canvas.addEventListener("lostpointercapture", onPointerUp);
+          canvas.addEventListener("contextmenu", onContextMenu);
         } else {
           canvas.addEventListener("touchstart", onPointerDown, { passive: false });
           window.addEventListener("touchmove", onPointerMove, { passive: false });
@@ -1069,6 +1097,7 @@
           canvas.addEventListener("mousedown", onPointerDown);
           window.addEventListener("mousemove", onPointerMove);
           window.addEventListener("mouseup", onPointerUp);
+          canvas.addEventListener("contextmenu", onContextMenu);
         }
         window.addEventListener("keydown", onKeyDown);
         rafId = requestAnimationFrame(loop);
@@ -1084,6 +1113,7 @@
           canvas.removeEventListener("pointerup", onPointerUp);
           canvas.removeEventListener("pointercancel", onPointerUp);
           canvas.removeEventListener("lostpointercapture", onPointerUp);
+          canvas.removeEventListener("contextmenu", onContextMenu);
         } else {
           canvas.removeEventListener("touchstart", onPointerDown);
           window.removeEventListener("touchmove", onPointerMove);
@@ -1092,6 +1122,7 @@
           canvas.removeEventListener("mousedown", onPointerDown);
           window.removeEventListener("mousemove", onPointerMove);
           window.removeEventListener("mouseup", onPointerUp);
+          canvas.removeEventListener("contextmenu", onContextMenu);
         }
         window.removeEventListener("keydown", onKeyDown);
       },
