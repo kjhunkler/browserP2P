@@ -71,6 +71,8 @@
     let messageUntil = 0;
     let particles = [];
     let audioCtx = null;
+    let lastCssWidth = 0;
+    let lastCssHeight = 0;
 
     const world = new Map();
     const miners = new Map();
@@ -118,12 +120,21 @@
 
     function resize() {
       const rect = canvas.getBoundingClientRect();
+      lastCssWidth = rect.width;
+      lastCssHeight = rect.height;
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       canvas.width = Math.max(1, Math.round(rect.width * dpr));
       canvas.height = Math.max(1, Math.round(rect.height * dpr));
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       topPad = Math.max(64, Math.min(86, rect.height * 0.12));
       cell = Math.max(28, Math.floor(rect.width / 9));
+    }
+
+    function ensureCanvasSize() {
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return false;
+      if (Math.abs(rect.width - lastCssWidth) > 1 || Math.abs(rect.height - lastCssHeight) > 1 || canvas.width <= 1 || canvas.height <= 1) resize();
+      return true;
     }
 
     function genTile(x, y) {
@@ -1051,6 +1062,7 @@
     }
 
     function draw() {
+      if (!ensureCanvasSize()) return;
       const W = canvas.clientWidth;
       const H = canvas.clientHeight;
       ctx.clearRect(0, 0, W, H);

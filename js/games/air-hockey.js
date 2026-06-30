@@ -24,6 +24,16 @@
     let activePointerId = null;
     let dragging = false;
     let rects = { stands: null, table: null };
+    let audioCtx = null;
+    let eventSeq = 0;
+    let seenEventSeq = 0;
+    let lastWallEventAt = 0;
+    let lastCssWidth = 0;
+    let lastCssHeight = 0;
+    const lastHitEventAt = new Map();
+    const events = [];
+    const particles = [];
+    const puckTrail = [];
 
     const state = {
       seats: { a: null, b: null },
@@ -37,6 +47,80 @@
     function now() { return performance.now(); }
     function isHost() { return !!host.isHost(); }
     function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+    function playSound(kind, power = 1) {
+      try {
+        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+        const t = audioCtx.currentTime;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        const tones = {
+          serve: [360, 0.10, 0.035, "triangle"],
+          claim: [520, 0.08, 0.035, "sine"],
+          leave: [180, 0.10, 0.030, "sawtooth"],
+          hit: [150 + power * 130, 0.055, 0.045, "square"],
+          wall: [95 + power * 80, 0.045, 0.032, "square"],
+          goal: [620, 0.28, 0.060, "triangle"],
+        };
+        const [freq, dur, vol, type] = tones[kind] || tones.hit;
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, t);
+        if (kind === "goal") {
+          osc.frequency.setValueAtTime(420, t);
+          osc.frequency.exponentialRampToValueAtTime(880, t + dur * 0.55);
+          osc.frequency.exponentialRampToValueAtTime(520, t + dur);
+        } else if (kind === "wall" || kind === "leave") {
+          osc.frequency.exponentialRampToValueAtTime(Math.max(45, freq * 0.55), t + dur);
+        }
+        gain.gain.setValueAtTime(vol * clamp(power, 0.45, 1.8), t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(t);
+        osc.stop(t + dur);
+      } catch {}
+    }
+    function addParticle(x, y, color, vx, vy, life, size) {
+      particles.push({ x, y, color, vx, vy, life, maxLife: life, size });
+      if (particles.length > 180) particles.splice(0, particles.length - 180);
+    }
+    function burst(x, y, color, count, power = 1) {
+      for (let i = 0; i < count; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const s = (0.18 + Math.random() * 0.72) * power;
+        addParticle(x, y, color, Math.cos(a) * s, Math.sin(a) * s, 340 + Math.random() * 340, 3 + Math.random() * 4);
+      }
+    }
+    function emitEvent(kind, x, y, power = 1, color = "#ffffff") {
+      const evt = { seq: ++eventSeq, kind, x, y, power, color };
+      events.push(evt);
+      while (events.length > 28) events.shift();
+      seenEventSeq = Math.max(seenEventSeq, evt.seq);
+      playEvent(evt);
+    }
+    function playEvent(evt) {
+      playSound(evt.kind, evt.power || 1);
+      if (evt.x == null || evt.y == null) return;
+      if (evt.kind === "goal") burst(evt.x, evt.y, evt.color || "#ffd35a", 44, 1.35);
+      else if (evt.kind === "hit") burst(evt.x, evt.y, evt.color || "#8fe3ff", 16, evt.power || 1);
+      else if (evt.kind === "wall") burst(evt.x, evt.y, "#c8eeff", 10, evt.power || 1);
+      else if (evt.kind === "serve") burst(evt.x, evt.y, "#ffffff", 18, 0.85);
+      else if (evt.kind === "claim") burst(evt.x, evt.y, "#7cfc9b", 18, 0.9);
+      else if (evt.kind === "leave") burst(evt.x, evt.y, "#ff9aa8", 12, 0.75);
+    }
+    function applyEvents(incoming) {
+      if (!incoming?.length) return;
+      const maxSeq = incoming.reduce((m, e) => Math.max(m, e.seq || 0), seenEventSeq);
+      if (!seenEventSeq) {
+        seenEventSeq = maxSeq;
+        return;
+      }
+      for (const evt of incoming) {
+        if ((evt.seq || 0) <= seenEventSeq) continue;
+        playEvent(evt);
+        seenEventSeq = Math.max(seenEventSeq, evt.seq || 0);
+      }
+    }
     function seatOf(id) {
       if (state.seats.a === id) return "a";
       if (state.seats.b === id) return "b";
@@ -72,6 +156,7 @@
       state.puck.vy = Math.abs(Math.sin(angle)) * speed * dir;
       state.playing = true;
       state.lastScoredBy = null;
+      emitEvent("serve", 0.5, 0.5, 0.85, "#ffffff");
     }
     function maybeStart() {
       if (state.seats.a && state.seats.b && !state.playing) servePuck();
@@ -108,14 +193,17 @@
       state.seats[seat] = id;
       ensureScore(id);
       state.mallets[id] = { ...seatStart(seat), vx: 0, vy: 0, t: now() };
+      emitEvent("claim", state.mallets[id].x, state.mallets[id].y, 0.9, profile(id).color || "#7cfc9b");
       maybeStart();
     }
 
     function leaveSeat(id) {
       const seat = seatOf(id);
       if (!seat) return;
+      const old = state.mallets[id] || seatStart(seat);
       state.seats[seat] = null;
       delete state.mallets[id];
+      emitEvent("leave", old.x, old.y, 0.7, profile(id).color || "#ff9aa8");
       resetPuck();
     }
 
@@ -162,11 +250,12 @@
       const id = state.seats[seat];
       if (id) state.scores[id] = (state.scores[id] || 0) + 1;
       state.lastScoredBy = id || null;
+      emitEvent("goal", state.puck.x, seat === "a" ? 0.03 : 0.97, 1.4, id ? (profile(id).color || "#ffd35a") : "#ffd35a");
       resetPuck();
       if (state.seats.a && state.seats.b) setTimeout(() => { if (isHost() && state.seats.a && state.seats.b && !state.playing) servePuck(); }, 700);
     }
 
-    function collideMallet(m) {
+    function collideMallet(id, m) {
       const puck = state.puck;
       const dx = puck.x - m.x;
       const dy = puck.y - m.y;
@@ -186,6 +275,11 @@
       puck.vx += (m.vx || 0) * 0.42;
       puck.vy += (m.vy || 0) * 0.42;
       const speed = Math.hypot(puck.vx, puck.vy);
+      const tNow = now();
+      if (tNow - (lastHitEventAt.get(id) || 0) > 75) {
+        lastHitEventAt.set(id, tNow);
+        emitEvent("hit", puck.x, puck.y, clamp(speed, 0.5, 1.8), "#8fe3ff");
+      }
       if (speed < 0.42) {
         puck.vx += nx * 0.34;
         puck.vy += ny * 0.34;
@@ -201,17 +295,19 @@
       const scored = goalForY(puck.y);
       if (scored) { scoreGoal(scored); return; }
 
-      if (puck.x < PUCK_R) { puck.x = PUCK_R; puck.vx = Math.abs(puck.vx) * WALL_RESTITUTION; }
-      if (puck.x > 1 - PUCK_R) { puck.x = 1 - PUCK_R; puck.vx = -Math.abs(puck.vx) * WALL_RESTITUTION; }
+      const wallPower = clamp(Math.hypot(puck.vx, puck.vy), 0.45, 1.5);
+      const tNow = now();
+      if (puck.x < PUCK_R) { puck.x = PUCK_R; puck.vx = Math.abs(puck.vx) * WALL_RESTITUTION; if (tNow - lastWallEventAt > 80) { lastWallEventAt = tNow; emitEvent("wall", puck.x, puck.y, wallPower, "#c8eeff"); } }
+      if (puck.x > 1 - PUCK_R) { puck.x = 1 - PUCK_R; puck.vx = -Math.abs(puck.vx) * WALL_RESTITUTION; if (tNow - lastWallEventAt > 80) { lastWallEventAt = tNow; emitEvent("wall", puck.x, puck.y, wallPower, "#c8eeff"); } }
 
       const goalLeft = 0.5 - GOAL_W / 2;
       const goalRight = 0.5 + GOAL_W / 2;
       const outsideGoal = puck.x < goalLeft || puck.x > goalRight;
-      if (outsideGoal && puck.y < PUCK_R) { puck.y = PUCK_R; puck.vy = Math.abs(puck.vy) * WALL_RESTITUTION; }
-      if (outsideGoal && puck.y > 1 - PUCK_R) { puck.y = 1 - PUCK_R; puck.vy = -Math.abs(puck.vy) * WALL_RESTITUTION; }
+      if (outsideGoal && puck.y < PUCK_R) { puck.y = PUCK_R; puck.vy = Math.abs(puck.vy) * WALL_RESTITUTION; if (tNow - lastWallEventAt > 80) { lastWallEventAt = tNow; emitEvent("wall", puck.x, puck.y, wallPower, "#c8eeff"); } }
+      if (outsideGoal && puck.y > 1 - PUCK_R) { puck.y = 1 - PUCK_R; puck.vy = -Math.abs(puck.vy) * WALL_RESTITUTION; if (tNow - lastWallEventAt > 80) { lastWallEventAt = tNow; emitEvent("wall", puck.x, puck.y, wallPower, "#c8eeff"); } }
 
       for (const id of [state.seats.a, state.seats.b]) {
-        if (id && state.mallets[id]) collideMallet(state.mallets[id]);
+        if (id && state.mallets[id]) collideMallet(id, state.mallets[id]);
       }
 
       const f = Math.exp(-FRICTION * dt);
@@ -225,6 +321,28 @@
       if (speed < 0.08 && state.seats.a && state.seats.b) servePuck();
     }
 
+    function updateEffects(dtMs) {
+      const puck = state.puck;
+      if (state.playing) {
+        puckTrail.push({ x: puck.x, y: puck.y, life: 260, maxLife: 260 });
+        if (puckTrail.length > 18) puckTrail.shift();
+      }
+      for (let i = puckTrail.length - 1; i >= 0; i--) {
+        puckTrail[i].life -= dtMs;
+        if (puckTrail[i].life <= 0) puckTrail.splice(i, 1);
+      }
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        const dt = dtMs / 1000;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vx *= 0.96;
+        p.vy *= 0.96;
+        p.life -= dtMs;
+        if (p.life <= 0) particles.splice(i, 1);
+      }
+    }
+
     function makeSnapshot() {
       return {
         seats: { ...state.seats },
@@ -233,6 +351,7 @@
         puck: { ...state.puck },
         playing: state.playing,
         lastScoredBy: state.lastScoredBy,
+        events: events.slice(-16),
       };
     }
 
@@ -244,16 +363,26 @@
       state.puck = { x: 0.5, y: 0.5, vx: 0, vy: 0, ...(s.puck || {}) };
       state.playing = !!s.playing;
       state.lastScoredBy = s.lastScoredBy || null;
+      applyEvents(s.events);
     }
 
     function currentSnapshot() { return makeSnapshot(); }
 
     function resize() {
       const rect = canvas.getBoundingClientRect();
+      lastCssWidth = rect.width;
+      lastCssHeight = rect.height;
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       canvas.width = Math.max(1, Math.round(rect.width * dpr));
       canvas.height = Math.max(1, Math.round(rect.height * dpr));
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function ensureCanvasSize() {
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return false;
+      if (Math.abs(rect.width - lastCssWidth) > 1 || Math.abs(rect.height - lastCssHeight) > 1 || canvas.width <= 1 || canvas.height <= 1) resize();
+      return true;
     }
 
     function viewFlip() {
@@ -434,7 +563,34 @@
       ctx.fillText(pInfo.icon || "●", s.x, s.y + 1);
     }
 
+    function drawEffects() {
+      for (const p of puckTrail) {
+        const s = tableToScreen(p);
+        const alpha = Math.max(0, p.life / p.maxLife);
+        const r = PUCK_R * Math.min(rects.table.w, rects.table.h) * (0.65 + alpha * 0.35);
+        ctx.fillStyle = `rgba(210,232,255,${alpha * 0.24})`;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      for (const p of particles) {
+        const s = tableToScreen(p);
+        const alpha = Math.max(0, p.life / p.maxLife);
+        const hex = /^#?([0-9a-f]{6})$/i.exec(p.color || "");
+        if (hex) {
+          const n = parseInt(hex[1], 16);
+          ctx.fillStyle = `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+        } else {
+          ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+        }
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, p.size * alpha, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
     function draw() {
+      if (!ensureCanvasSize()) return;
       const W = canvas.clientWidth;
       const H = canvas.clientHeight;
       const standsH = Math.max(74, Math.min(118, H * 0.18));
@@ -448,6 +604,7 @@
       ctx.fillRect(0, 0, W, H);
       drawStands(W);
       drawTable();
+      drawEffects();
       drawDisc(null, state.puck, true);
       for (const id of [state.seats.a, state.seats.b]) if (id && state.mallets[id]) drawDisc(id, state.mallets[id], false);
       if (!state.playing && state.seats.a && state.seats.b) {
@@ -505,7 +662,8 @@
     function loop(ts) {
       rafId = requestAnimationFrame(loop);
       if (!lastTs) lastTs = ts;
-      const dt = Math.min(0.05, (ts - lastTs) / 1000);
+      const frameMs = ts - lastTs;
+      const dt = Math.min(0.05, frameMs / 1000);
       lastTs = ts;
       if (isHost()) {
         syncPlayerList();
@@ -515,6 +673,7 @@
           host.broadcastState(makeSnapshot());
         }
       }
+      updateEffects(frameMs || 16);
       draw();
     }
 

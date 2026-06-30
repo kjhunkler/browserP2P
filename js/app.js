@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.2.5";
+const APP_VERSION = "2.2.8";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 
@@ -989,6 +989,10 @@ function promptForSavedGame(game) {
   return null;
 }
 
+function savedGameStateOrNull(game) {
+  return loadSavedGameState(game)?.state || null;
+}
+
 function gameName(game) {
   return window.BP2PGames?.[game]?.name || game;
 }
@@ -1004,7 +1008,7 @@ async function setGameMode(game, broadcast = true, restoredState = undefined, pr
   else enterFreePlayMode();
   const initialState = restoredState !== undefined
     ? restoredState
-    : (promptHost && net.isHost ? promptForSavedGame(selectedGame) : null);
+    : (promptHost && net.isHost ? promptForSavedGame(selectedGame) : savedGameStateOrNull(selectedGame));
   await startActiveGame(initialState);
   if (broadcast) {
     if (net.isHost) net.broadcast({ t: "game-mode", game: selectedGame });
