@@ -14,6 +14,7 @@
   const WATER_SURFACE_Y = 0.315;
   const MIN_FISH_Y = 0.48;
   const MAX_FISH_Y = 0.91;
+  const FISH_EDGE_PAD = 0.06;
   const FISH_TYPES = [
     { kind: "minnow", points: 2, w: 0.042, h: 0.020, colors: ["#9be7ff", "#c8f6ff", "#7ed6ff"], speed: 0.018 },
     { kind: "snapper", points: 7, w: 0.058, h: 0.030, colors: ["#ff7b7b", "#ffd166", "#f77f00"], speed: 0.016 },
@@ -142,7 +143,7 @@
         id: "f" + Math.random().toString(36).slice(2, 9),
         kind: type.kind,
         points: type.points + Math.floor(rand(0, type.points * 0.35)),
-        x: dir > 0 ? rand(-0.18, -0.04) : rand(1.04, 1.18),
+        x: rand(FISH_EDGE_PAD, 1 - FISH_EDGE_PAD),
         y: rand(MIN_FISH_Y, MAX_FISH_Y),
         vx: dir * type.speed * rand(0.70, 1.10),
         vy: rand(-0.004, 0.004),
@@ -400,8 +401,9 @@
         f.phase += dt * 4;
         f.x += f.vx * dt;
         f.y += Math.sin(f.phase) * f.speed * 0.20 * dt + f.vy * dt;
-        if (f.x < -0.24 || f.x > 1.24 || f.y < MIN_FISH_Y - 0.04 || f.y > 0.98) Object.assign(f, spawnFish());
-        else f.y = clamp(f.y, MIN_FISH_Y, MAX_FISH_Y);
+        if (f.x < FISH_EDGE_PAD) { f.x = FISH_EDGE_PAD; f.vx = Math.abs(f.vx); }
+        if (f.x > 1 - FISH_EDGE_PAD) { f.x = 1 - FISH_EDGE_PAD; f.vx = -Math.abs(f.vx); }
+        f.y = clamp(f.y, MIN_FISH_Y, MAX_FISH_Y);
       }
       for (const s of state.snags) {
         s.phase += dt;
