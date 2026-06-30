@@ -14,7 +14,7 @@
   const LINEAR_DAMPING = 0.992;
   const ANGULAR_DAMPING = 0.985;
   const RESTITUTION = 0.03;
-  const FRICTION = 0.82;
+  const FRICTION = 0.90;
   const RESTING_SPEED = 0.030;
   const SHAPES = [
     { key: "brick", name: "Brick", w: 0.145, h: 0.050, mass: 1.0, emoji: "▭", color: "#e46b5d" },
@@ -288,6 +288,14 @@
       onImpulse?.(j);
     }
 
+    function belowScreen(b) {
+      const playHeight = ui.play?.h || canvas.clientHeight || 1;
+      const scale = ui.scale || 1;
+      const bottomY = FLOOR_Y - state.cameraY + (playHeight * 0.48) / scale;
+      const radius = Math.hypot(b.w, b.h) / 2;
+      return b.y - radius > bottomY;
+    }
+
     function stabilizeRestingPair(a, b, n, contactCount) {
       if (contactCount < 2) return;
       const top = n.y < -0.45 ? b : (n.y > 0.45 ? a : null);
@@ -326,9 +334,7 @@
       }
       for (const b of state.blocks) {
         if (b.fixed) continue;
-        if (b.x < WALL_PAD) { b.x = WALL_PAD; b.vx = Math.abs(b.vx) * 0.15; b.av *= 0.6; }
-        if (b.x > 1 - WALL_PAD) { b.x = 1 - WALL_PAD; b.vx = -Math.abs(b.vx) * 0.15; b.av *= 0.6; }
-        if (b.y > 1.16) {
+        if (belowScreen(b)) {
           emitEvent("fall", clamp(b.x, 0.05, 0.95), 0.95, 1.1, b.color);
           b.dead = true;
           if (b.owner && b.owner !== "system") state.scores[b.owner] = Math.max(0, (state.scores[b.owner] || 0) - 2);
@@ -339,7 +345,7 @@
 
     function solveGroundContact(b) {
       if (b.fixed) return;
-      const below = corners(b).filter((p) => p.y > FLOOR_Y);
+      const below = corners(b).filter((p) => p.y > FLOOR_Y && p.x >= 0 && p.x <= 1);
       if (!below.length) return;
       const n = { x: 0, y: -1 };
       const count = below.length;
@@ -386,7 +392,8 @@
       }
       const height = Math.max(0, Math.round((FLOOR_Y - minY) * 100));
       if (height > state.lastHeight) state.lastHeight = height;
-      state.cameraY += (Math.max(0, 0.48 - minY) - state.cameraY) * 0.025;
+      const targetCameraY = Math.max(0, 0.62 - minY);
+      state.cameraY += (targetCameraY - state.cameraY) * 0.035;
     }
 
     function updateHost(dt) {
@@ -403,7 +410,7 @@
     function placeBlock(id, input) {
       const shape = shapeByKey(input.shape);
       const x = clamp(Number(input.x) || 0.5, WALL_PAD + shape.w / 2, 1 - WALL_PAD - shape.w / 2);
-      const y = clamp((Number(input.y) || 0.25) - shape.h * 0.25, -0.55, FLOOR_Y - shape.h / 2 - 0.01);
+      const y = clamp((Number(input.y) || 0.25) - shape.h * 0.25, -0.7 - state.cameraY, FLOOR_Y - shape.h / 2 - 0.01);
       let angle = clamp(Number(input.angle) || 0, -Math.PI, Math.PI);
       if (Math.abs(angle) < 0.025) angle = 0;
       const b = makeBlock("b" + state.nextId++, id, x, y, angle, { ...shape, color: profile(id).color || shape.color });
@@ -473,12 +480,12 @@
     }
 
     function sx(x) { return ui.play.x + ui.play.w / 2 + (x - 0.5) * ui.scale; }
-    function sy(y) { return ui.play.y + ui.play.h * 0.52 + (y - FLOOR_Y - state.cameraY) * ui.scale; }
+    function sy(y) { return ui.play.y + ui.play.h * 0.52 + (y - FLOOR_Y + state.cameraY) * ui.scale; }
     function worldPoint(clientX, clientY) {
       const box = canvas.getBoundingClientRect();
       return {
         x: clamp(0.5 + (clientX - box.left - ui.play.x - ui.play.w / 2) / ui.scale, WALL_PAD, 1 - WALL_PAD),
-        y: clamp(FLOOR_Y + state.cameraY + (clientY - box.top - ui.play.y - ui.play.h * 0.52) / ui.scale, -0.7, FLOOR_Y - 0.04),
+        y: clamp(FLOOR_Y - state.cameraY + (clientY - box.top - ui.play.y - ui.play.h * 0.52) / ui.scale, -0.7 - state.cameraY, FLOOR_Y - 0.04),
       };
     }
 
