@@ -1317,10 +1317,12 @@
 
     function onPointerDown(e) {
       const p = pointerPoint(e);
-      activePointers.set(e.pointerId ?? "mouse", pointerEntry(e));
-      if (drag && activePointerId !== null && e.pointerId !== activePointerId) {
+      const pointerId = e.pointerId ?? "mouse";
+      activePointers.set(pointerId, pointerEntry(e));
+      if (drag && (activePointerId === null || e.pointerId === undefined || e.pointerId !== activePointerId)) {
         e.preventDefault();
         rotateCurrent();
+        activePointers.delete(pointerId);
         return;
       }
       if (pointIn(ui.reset, p.x, p.y)) { e.preventDefault(); sendAction({ type: "reset" }); return; }
@@ -1358,6 +1360,15 @@
     }
 
     function onPointerUp(e) {
+      if (drag && activePointerId === null && e.changedTouches && e.touches?.length) {
+        e.preventDefault();
+        activePointers.set("mouse", pointerEntry(e));
+        const p = pointerPoint(e);
+        drag.x = p.x;
+        drag.y = p.y;
+        drag.hover = pointIn(ui.deck, p.x, p.y) ? null : nearestEmptyCell(p.x, p.y, ui.view.scale * 0.46);
+        return;
+      }
       if (drag && activePointerId !== null && e.pointerId !== undefined && e.pointerId !== activePointerId) {
         e.preventDefault();
         activePointers.delete(e.pointerId ?? "mouse");
@@ -1375,6 +1386,11 @@
       activePointers.delete(e.pointerId ?? "mouse");
       if (!activePointers.size) boardGesture = null;
       else startBoardGesture();
+    }
+
+    function onLostPointerCapture(e) {
+      activePointers.delete(e.pointerId ?? "mouse");
+      if (!activePointers.size && !drag) boardGesture = null;
     }
 
     function onKeyDown(e) {
@@ -1440,7 +1456,7 @@
           canvas.addEventListener("pointermove", onPointerMove);
           canvas.addEventListener("pointerup", onPointerUp);
           canvas.addEventListener("pointercancel", onPointerUp);
-          canvas.addEventListener("lostpointercapture", onPointerUp);
+          canvas.addEventListener("lostpointercapture", onLostPointerCapture);
           canvas.addEventListener("contextmenu", onContextMenu);
           canvas.addEventListener("wheel", onWheel, { passive: false });
         } else {
@@ -1467,7 +1483,7 @@
           canvas.removeEventListener("pointermove", onPointerMove);
           canvas.removeEventListener("pointerup", onPointerUp);
           canvas.removeEventListener("pointercancel", onPointerUp);
-          canvas.removeEventListener("lostpointercapture", onPointerUp);
+          canvas.removeEventListener("lostpointercapture", onLostPointerCapture);
           canvas.removeEventListener("contextmenu", onContextMenu);
           canvas.removeEventListener("wheel", onWheel);
         } else {
