@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.3.4";
+const APP_VERSION = "2.3.6";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 
@@ -482,7 +482,7 @@ function handleHostMsg(peerId, msg) {
     if (id) handleGameInput(id, msg.game, msg.input);
 
   } else if (msg.t === "game-mode") {
-    setGameMode(msg.game, true, undefined, true).catch(console.error);
+    setGameMode(msg.game, true, undefined, false).catch(console.error);
 
   } else if (msg.t === "play") {
     startPlaying(true);
@@ -2087,7 +2087,7 @@ $("#btn-join").addEventListener("click", () => {
 });
 
 $("#btn-start").addEventListener("click", () => startPlaying(true));
-$("#game-select")?.addEventListener("change", (e) => setGameMode(e.target.value).catch(console.error));
+$("#game-select")?.addEventListener("change", (e) => setGameMode(e.target.value, true, undefined, true).catch(console.error));
 $("#btn-draw")?.addEventListener("click", () => setDrawMode(!drawMode));
 $("#btn-draw-pen")?.addEventListener("click", () => setDrawTool("pen"));
 $("#btn-draw-highlighter")?.addEventListener("click", () => setDrawTool("highlighter"));

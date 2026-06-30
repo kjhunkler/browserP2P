@@ -1,5 +1,5 @@
 /* Multiplayer Paint Panic for browserP2P.
- * Host owns the arena, paint grid, player motion, powerups, scoring, and round timer.
+ * Host owns the arena, paint grid, player motion, scoring, and round timer.
  */
 (function () {
   "use strict";
@@ -11,8 +11,6 @@
   const PLAYER_R = 0.024;
   const BASE_SPEED = 0.28;
   const PAINT_RADIUS = 1;
-  const POWERUP_TARGET = 8;
-  const POWERUP_TYPES = ["brush", "speed", "bomb", "shield", "swap"];
 
   function create(host, initialState) {
     const canvas = host.canvas;
@@ -40,7 +38,6 @@
       over: false,
       grid: [],
       players: {},
-      powerups: [],
       scores: {},
     };
 
@@ -65,14 +62,13 @@
         const tones = {
           paint: [260, 0.045, 0.018, "square"],
           splat: [140, 0.10, 0.045, "sawtooth"],
-          power: [560, 0.12, 0.050, "triangle"],
           bump: [90, 0.08, 0.040, "square"],
           round: [720, 0.22, 0.060, "triangle"],
         };
         const [freq, dur, vol, type] = tones[kind] || tones.paint;
         osc.type = type;
         osc.frequency.setValueAtTime(freq, t);
-        if (kind === "power" || kind === "round") osc.frequency.exponentialRampToValueAtTime(freq * 1.6, t + dur);
+        if (kind === "round") osc.frequency.exponentialRampToValueAtTime(freq * 1.6, t + dur);
         else osc.frequency.exponentialRampToValueAtTime(Math.max(45, freq * 0.55), t + dur);
         gain.gain.setValueAtTime(vol * clamp(power, 0.35, 1.8), t);
         gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
@@ -104,7 +100,6 @@
       playSound(evt.kind, evt.power || 1);
       if (evt.kind === "paint") burst(evt.x, evt.y, evt.color, 8, 0.55);
       else if (evt.kind === "splat") burst(evt.x, evt.y, evt.color, 38, 1.2);
-      else if (evt.kind === "power") burst(evt.x, evt.y, "#fff3a3", 24, 0.9);
       else if (evt.kind === "bump") burst(evt.x, evt.y, "#ffffff", 16, 0.8);
       else if (evt.kind === "round") burst(0.5, 0.5, "#ffd35a", 54, 1.4);
     }
@@ -146,7 +141,6 @@
       state.over = false;
       state.round++;
       state.grid = emptyGrid();
-      state.powerups = [];
       state.scores = {};
       for (const p of Object.values(state.players)) {
         p.x = rand(0.12, 0.88);
@@ -155,9 +149,6 @@
         p.vy = 0;
         p.targetX = p.x;
         p.targetY = p.y;
-        p.brushUntil = 0;
-        p.speedUntil = 0;
-        p.shieldUntil = 0;
         state.scores[p.id] = 0;
       }
       emitEvent("round", 0.5, 0.5, 1.2, "#ffd35a");
@@ -170,7 +161,6 @@
       state.over = false;
       state.grid = emptyGrid();
       state.players = {};
-      state.powerups = [];
       state.scores = {};
       syncPlayerList();
     }
@@ -182,42 +172,12 @@
       Object.keys(state.scores).forEach((id) => { if (!live.has(id)) delete state.scores[id]; });
       for (const p of host.getPlayers()) {
         if (!state.players[p.id]) {
-          state.players[p.id] = { id: p.id, x: rand(0.14, 0.86), y: rand(0.18, 0.84), vx: 0, vy: 0, targetX: 0.5, targetY: 0.5, brushUntil: 0, speedUntil: 0, shieldUntil: 0 };
+          state.players[p.id] = { id: p.id, x: rand(0.14, 0.86), y: rand(0.18, 0.84), vx: 0, vy: 0, targetX: 0.5, targetY: 0.5 };
           state.players[p.id].targetX = state.players[p.id].x;
           state.players[p.id].targetY = state.players[p.id].y;
         }
         if (state.scores[p.id] == null) state.scores[p.id] = 0;
       }
-    }
-
-    function spawnPowerup() {
-      return { id: "p" + Math.random().toString(36).slice(2, 9), type: choice(POWERUP_TYPES), x: rand(0.08, 0.92), y: rand(0.12, 0.88), t: now() };
-    }
-
-    function powerLabel(type) {
-      return type === "brush" ? "🖌️" : type === "speed" ? "⚡" : type === "bomb" ? "💣" : type === "shield" ? "🛡️" : "🔀";
-    }
-
-    function applyPowerup(p, item) {
-      const t = Date.now();
-      if (item.type === "brush") p.brushUntil = t + 9000;
-      else if (item.type === "speed") p.speedUntil = t + 7000;
-      else if (item.type === "shield") p.shieldUntil = t + 9000;
-      else if (item.type === "bomb") {
-        paintAt(p.id, p.x, p.y, 4);
-        emitEvent("splat", p.x, p.y, 1.2, colorFor(p.id));
-      } else if (item.type === "swap") {
-        const ids = Object.keys(state.players).filter((id) => id !== p.id);
-        const other = ids.length ? state.players[choice(ids)] : null;
-        if (other) {
-          const ox = other.x;
-          const oy = other.y;
-          other.x = p.x; other.y = p.y;
-          p.x = ox; p.y = oy;
-          emitEvent("power", p.x, p.y, 1, "#fff3a3");
-        }
-      }
-      emitEvent("power", item.x, item.y, 1, "#fff3a3");
     }
 
     function handleAction(id, input) {
@@ -228,7 +188,7 @@
         p.targetX = clamp(Number(input.x) || p.x, PLAYER_R, 1 - PLAYER_R);
         p.targetY = clamp(Number(input.y) || p.y, PLAYER_R, 1 - PLAYER_R);
       } else if (input.type === "splat") {
-        paintAt(id, p.x, p.y, Date.now() < p.brushUntil ? 4 : 3);
+        paintAt(id, p.x, p.y, 3);
         emitEvent("splat", p.x, p.y, 1.0, colorFor(id));
       } else if (input.type === "restart" && state.over) {
         clearAndRestart();
@@ -242,7 +202,7 @@
 
     function updatePlayers(dt) {
       for (const p of Object.values(state.players)) {
-        const speed = BASE_SPEED * (Date.now() < p.speedUntil ? 1.65 : 1);
+        const speed = BASE_SPEED;
         const dx = p.targetX - p.x;
         const dy = p.targetY - p.y;
         const d = Math.hypot(dx, dy);
@@ -251,8 +211,7 @@
           p.x += dx / d * move;
           p.y += dy / d * move;
         }
-        const radius = Date.now() < p.brushUntil ? 2 : 1;
-        const changed = paintAt(p.id, p.x, p.y, radius);
+        const changed = paintAt(p.id, p.x, p.y, PAINT_RADIUS);
         if (changed > 0 && Math.random() < 0.10) emitEvent("paint", p.x, p.y, 0.45, colorFor(p.id));
       }
 
@@ -266,22 +225,9 @@
           if (d > 0 && d < PLAYER_R * 2) {
             const nx = dx / d, ny = dy / d;
             const push = (PLAYER_R * 2 - d) * 0.5;
-            if (Date.now() >= a.shieldUntil) { a.x -= nx * push; a.y -= ny * push; }
-            if (Date.now() >= b.shieldUntil) { b.x += nx * push; b.y += ny * push; }
+            a.x -= nx * push; a.y -= ny * push;
+            b.x += nx * push; b.y += ny * push;
             emitEvent("bump", (a.x + b.x) / 2, (a.y + b.y) / 2, 0.55, "#ffffff");
-          }
-        }
-      }
-    }
-
-    function updatePowerups() {
-      while (state.powerups.length < POWERUP_TARGET) state.powerups.push(spawnPowerup());
-      for (const p of Object.values(state.players)) {
-        for (let i = state.powerups.length - 1; i >= 0; i--) {
-          const item = state.powerups[i];
-          if (Math.hypot(p.x - item.x, p.y - item.y) < PLAYER_R * 1.9) {
-            state.powerups.splice(i, 1);
-            applyPowerup(p, item);
           }
         }
       }
@@ -296,7 +242,6 @@
       }
       if (state.over) return;
       updatePlayers(dt);
-      updatePowerups();
     }
 
     function makeSnapshot() {
@@ -307,7 +252,6 @@
         over: state.over,
         grid: state.grid,
         players: state.players,
-        powerups: state.powerups,
         scores: state.scores,
         events: events.slice(-18),
       };
@@ -321,7 +265,6 @@
       state.over = !!s.over;
       state.grid = Array.isArray(s.grid) ? s.grid.slice() : emptyGrid();
       state.players = { ...(s.players || {}) };
-      state.powerups = (s.powerups || []).map((p) => ({ ...p }));
       state.scores = { ...(s.scores || {}) };
       applyEvents(s.events);
     }
@@ -394,21 +337,6 @@
       }
     }
 
-    function drawPowerups() {
-      for (const item of state.powerups) {
-        const x = sx(item.x);
-        const y = sy(item.y);
-        const pulse = 0.5 + 0.5 * Math.sin(now() / 180 + item.x * 10);
-        drawPixelRect(x - 11 - pulse * 2, y - 11 - pulse * 2, 22 + pulse * 4, 22 + pulse * 4, "rgba(255,255,255,0.18)");
-        drawPixelRect(x - 10, y - 10, 20, 20, "#fff3a3");
-        ctx.font = "16px system-ui, sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillStyle = "#111";
-        ctx.fillText(powerLabel(item.type), x, y + 1);
-      }
-    }
-
     function drawPlayers() {
       for (const p of Object.values(state.players)) {
         const prof = profile(p.id);
@@ -420,11 +348,6 @@
           ctx.strokeStyle = `rgba(124,252,155,${0.5 + pulse * 0.5})`;
           ctx.lineWidth = 3;
           ctx.beginPath(); ctx.arc(x, y, r + 5 + pulse * 4, 0, Math.PI * 2); ctx.stroke();
-        }
-        if (Date.now() < p.shieldUntil) {
-          ctx.strokeStyle = "rgba(150,210,255,0.88)";
-          ctx.lineWidth = 3;
-          ctx.beginPath(); ctx.arc(x, y, r + 5, 0, Math.PI * 2); ctx.stroke();
         }
         drawPixelRect(x - r, y - r, r * 2, r * 2, prof.color || "#7cfc9b");
         if (p.id === myId) {
@@ -525,7 +448,6 @@
       ctx.imageSmoothingEnabled = false;
       ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
       drawArena();
-      drawPowerups();
       drawEffects();
       drawPlayers();
       drawHud();
