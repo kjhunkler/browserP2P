@@ -5,19 +5,22 @@
   "use strict";
 
   const SNAPSHOT_HZ = 15;
-  const MAX_FISH = 44;
-  const MAX_SNAGS = 18;
+  const MAX_FISH = 62;
+  const MAX_SNAGS = 9;
   const GRAVITY = 0.54;
   const CAST_SPEED = 0.62;
   const REEL_SPEED = 0.34;
   const HOOK_R = 0.018;
+  const WATER_SURFACE_Y = 0.315;
+  const MIN_FISH_Y = 0.48;
+  const MAX_FISH_Y = 0.91;
   const FISH_TYPES = [
-    { kind: "minnow", points: 2, w: 0.052, h: 0.020, colors: ["#9be7ff", "#c8f6ff", "#7ed6ff"], speed: 0.050 },
-    { kind: "snapper", points: 7, w: 0.075, h: 0.032, colors: ["#ff7b7b", "#ffd166", "#f77f00"], speed: 0.042 },
-    { kind: "tuna", points: 14, w: 0.105, h: 0.040, colors: ["#5386e4", "#89b4ff", "#2b59c3"], speed: 0.061 },
-    { kind: "jelly", points: 10, w: 0.062, h: 0.052, colors: ["#d783ff", "#ff9af5", "#a855f7"], speed: 0.030 },
-    { kind: "eel", points: 18, w: 0.130, h: 0.024, colors: ["#70e000", "#38b000", "#9ef01a"], speed: 0.072 },
-    { kind: "gold", points: 30, w: 0.070, h: 0.030, colors: ["#ffd700", "#fff3a3", "#ff9f1c"], speed: 0.080 },
+    { kind: "minnow", points: 2, w: 0.072, h: 0.030, colors: ["#9be7ff", "#c8f6ff", "#7ed6ff"], speed: 0.050 },
+    { kind: "snapper", points: 7, w: 0.100, h: 0.046, colors: ["#ff7b7b", "#ffd166", "#f77f00"], speed: 0.042 },
+    { kind: "tuna", points: 14, w: 0.140, h: 0.055, colors: ["#5386e4", "#89b4ff", "#2b59c3"], speed: 0.061 },
+    { kind: "jelly", points: 10, w: 0.086, h: 0.072, colors: ["#d783ff", "#ff9af5", "#a855f7"], speed: 0.030 },
+    { kind: "eel", points: 18, w: 0.165, h: 0.034, colors: ["#70e000", "#38b000", "#9ef01a"], speed: 0.072 },
+    { kind: "gold", points: 30, w: 0.105, h: 0.048, colors: ["#ffd700", "#fff3a3", "#ff9f1c"], speed: 0.080 },
   ];
   const SNAG_TYPES = ["boot", "crate", "kelp", "anchor", "can"];
 
@@ -139,12 +142,12 @@
         id: "f" + Math.random().toString(36).slice(2, 9),
         kind: type.kind,
         points: type.points + Math.floor(rand(0, type.points * 0.35)),
-        x: dir > 0 ? -0.12 : 1.12,
-        y: rand(0.36, 0.92),
+        x: rand(-0.04, 1.04),
+        y: rand(MIN_FISH_Y, MAX_FISH_Y),
         vx: dir * type.speed * rand(0.75, 1.35),
         vy: rand(-0.010, 0.010),
-        w: type.w * rand(0.82, 1.35),
-        h: type.h * rand(0.82, 1.45),
+        w: type.w * rand(0.95, 1.45),
+        h: type.h * rand(0.95, 1.50),
         color,
         accent: choice(type.colors),
         phase: rand(0, Math.PI * 2),
@@ -156,9 +159,9 @@
         id: "s" + Math.random().toString(36).slice(2, 9),
         kind: choice(SNAG_TYPES),
         x: rand(0.05, 0.95),
-        y: rand(0.54, 0.94),
-        w: rand(0.035, 0.070),
-        h: rand(0.025, 0.055),
+        y: rand(0.66, 0.96),
+        w: rand(0.025, 0.050),
+        h: rand(0.020, 0.042),
         drift: rand(-0.006, 0.006),
         phase: rand(0, Math.PI * 2),
       };
@@ -271,6 +274,7 @@
 
     function updateHook(id, p, dt) {
       const start = rodPoint(p);
+      const snag = p.snagId ? snagById(p.snagId) : null;
       if (p.line === "idle") {
         p.hx += (start.x - p.hx) * 0.2;
         p.hy += (start.y - p.hy) * 0.2;
@@ -300,6 +304,11 @@
         p.hx += dx / d * REEL_SPEED * dt;
         p.hy += dy / d * REEL_SPEED * dt;
         p.tension = Math.max(0, p.tension - dt * 0.22);
+        if (snag) {
+          snag.x = p.hx;
+          snag.y = p.hy + 0.012;
+          snag.drift = 0;
+        }
         if (d < 0.030) finishReel(id, p);
       }
       p.hx = clamp(p.hx, -0.08, 1.08);
@@ -331,9 +340,16 @@
           state.fish.push(spawnFish());
         }
       } else if (p.snagId) {
+        const snag = snagById(p.snagId);
         const penalty = Math.min(6, state.scores[id] || 0);
         state.scores[id] = Math.max(0, (state.scores[id] || 0) - penalty);
-        emitEvent("snag", p.seatX, 0.25, 1.1, "#d6b88a", penalty ? "Trash -" + penalty : "Trash!");
+        if (snag) {
+          state.snags = state.snags.filter((s) => s.id !== snag.id);
+          state.combo[id] = 0;
+          emitEvent("snag", p.seatX, 0.25, 1.1, "#d6b88a", penalty ? "Trash cleared -" + penalty : "Trash cleared!");
+        } else {
+          emitEvent("snag", p.seatX, 0.25, 1.1, "#d6b88a", penalty ? "Trash -" + penalty : "Trash!");
+        }
       }
       p.line = "idle";
       p.catchId = null;
@@ -384,7 +400,8 @@
         f.phase += dt * 4;
         f.x += f.vx * dt;
         f.y += Math.sin(f.phase) * f.speed * 0.20 * dt + f.vy * dt;
-        if (f.x < -0.18 || f.x > 1.18 || f.y < 0.32 || f.y > 0.98) Object.assign(f, spawnFish());
+        if (f.x < -0.18 || f.x > 1.18 || f.y < MIN_FISH_Y - 0.04 || f.y > 0.98) Object.assign(f, spawnFish());
+        else f.y = clamp(f.y, MIN_FISH_Y, MAX_FISH_Y);
       }
       for (const s of state.snags) {
         s.phase += dt;
@@ -504,19 +521,29 @@
     }
 
     function drawFish(f) {
+      if (f.y < WATER_SURFACE_Y + f.h * 0.9) return;
       const x = sx(f.x);
       const y = sy(f.y);
       const w = f.w * canvas.clientWidth;
       const h = f.h * canvas.clientHeight;
       const dir = f.vx >= 0 ? 1 : -1;
-      drawPixelRect(x - w / 2, y - h / 2, w * 0.74, h, f.color);
-      drawPixelRect(x + dir * w * 0.20, y - h * 0.32, w * 0.20, h * 0.30, f.accent);
-      drawPixelRect(x - dir * w * 0.54, y - h * 0.34, w * 0.30, h * 0.68, f.accent);
-      drawPixelRect(x + dir * w * 0.24, y - h * 0.12, Math.max(2, w * 0.08), Math.max(2, h * 0.12), "#07111f");
+      const bodyX = x - w * 0.34;
+      const bodyY = y - h * 0.36;
+      ctx.fillStyle = "rgba(3,10,24,0.40)";
+      ctx.fillRect(Math.round(x - w * 0.56), Math.round(y - h * 0.48), Math.round(w * 1.08), Math.round(h * 1.02));
+      drawPixelRect(bodyX, bodyY, w * 0.68, h * 0.72, f.color);
+      drawPixelRect(bodyX + w * 0.08, bodyY - h * 0.18, w * 0.28, h * 0.22, f.accent);
+      drawPixelRect(bodyX + w * 0.16, bodyY + h * 0.68, w * 0.24, h * 0.20, f.accent);
+      drawPixelRect(x - dir * w * 0.54, y - h * 0.30, w * 0.26, h * 0.60, f.accent);
+      drawPixelRect(x - dir * w * 0.66, y - h * 0.18, w * 0.16, h * 0.36, f.accent);
+      drawPixelRect(x + dir * w * 0.26, y - h * 0.22, w * 0.20, h * 0.44, f.color);
+      drawPixelRect(x + dir * w * 0.34, y - h * 0.10, Math.max(3, w * 0.07), Math.max(3, h * 0.14), "#07111f");
+      drawPixelRect(x - w * 0.16, y - h * 0.05, w * 0.22, Math.max(2, h * 0.10), "rgba(255,255,255,0.28)");
       if (f.kind === "jelly") {
-        for (let i = -1; i <= 1; i++) drawPixelRect(x + i * w * 0.15, y + h * 0.35, 3, h * 0.55, f.accent);
+        drawPixelRect(x - w * 0.30, y - h * 0.38, w * 0.60, h * 0.42, f.color);
+        for (let i = -2; i <= 2; i++) drawPixelRect(x + i * w * 0.12, y + h * 0.04, 4, h * 0.70, f.accent);
       } else if (f.kind === "eel") {
-        drawPixelRect(x - w * 0.28, y + Math.sin(f.phase) * h * 0.2, w * 0.55, h * 0.35, f.accent);
+        drawPixelRect(x - w * 0.46, y + Math.sin(f.phase) * h * 0.25, w * 0.92, h * 0.42, f.accent);
       }
     }
 
