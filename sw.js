@@ -1,4 +1,4 @@
-const APP_VERSION = "2.3.8";
+const APP_VERSION = "2.3.9";
 const CACHE_NAME = `browserp2p-${APP_VERSION}`;
 const APP_SHELL = [
   "./",
@@ -9,6 +9,7 @@ const APP_SHELL = [
   "./js/games/air-hockey.js",
   "./js/games/fishing.js",
   "./js/games/paint-panic.js",
+  "./js/games/tower.js",
   "./js/peer-net.js",
   "./manifest.webmanifest",
   "./icons/robot.svg"
