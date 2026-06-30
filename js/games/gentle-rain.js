@@ -154,15 +154,37 @@
       return host.getPlayers().map((p) => p.id).sort();
     }
 
+    function placedTileIds() {
+      const ids = new Set();
+      for (const cell of Object.values(state.board)) if (cell?.tile?.id) ids.add(cell.tile.id);
+      return ids;
+    }
+
+    function addLiveTile(pool, seen, placed, tile) {
+      if (!tile?.id || seen.has(tile.id) || placed.has(tile.id)) return;
+      seen.add(tile.id);
+      pool.push(tile);
+    }
+
     function liveTilePool() {
-      const pool = state.deck.slice();
-      for (const hand of Object.values(state.hands)) pool.push(...(hand || []));
-      for (const current of Object.values(state.currentByPlayer)) if (current?.tile) pool.push(current.tile);
+      const pool = [];
+      const seen = new Set();
+      const placed = placedTileIds();
+      for (const tile of state.deck) addLiveTile(pool, seen, placed, tile);
+      for (const hand of Object.values(state.hands)) for (const tile of hand || []) addLiveTile(pool, seen, placed, tile);
+      for (const current of Object.values(state.currentByPlayer)) addLiveTile(pool, seen, placed, current?.tile);
       return pool;
     }
 
     function dealEvenly(pool = liveTilePool()) {
       const ids = sortedPlayers();
+      const placed = placedTileIds();
+      const seen = new Set();
+      pool = pool.filter((tile) => {
+        if (!tile?.id || seen.has(tile.id) || placed.has(tile.id)) return false;
+        seen.add(tile.id);
+        return true;
+      });
       state.deck = [];
       state.hands = {};
       state.currentByPlayer = {};
@@ -173,6 +195,12 @@
       ids.forEach((id) => { state.hands[id] = []; });
       pool.forEach((tile, i) => state.hands[ids[i % ids.length]].push(tile));
       for (const id of ids) drawForPlayer(id);
+    }
+
+    function reconcileActivePlayerTiles() {
+      if (!isHost()) return;
+      dealEvenly(liveTilePool());
+      checkEnd();
     }
 
     function drawForPlayer(id) {
@@ -1209,6 +1237,7 @@
         resize();
         if (initialState) applySnapshot(initialState);
         else if (isHost()) resetHostState();
+        if (isHost()) reconcileActivePlayerTiles();
         window.addEventListener("resize", resize);
         if (window.PointerEvent) {
           canvas.addEventListener("pointerdown", onPointerDown);
@@ -1261,7 +1290,7 @@
       onPeerInput(id, input) { handleAction(id, input); },
       onState(snapshot) { applySnapshot(snapshot); },
       getSnapshot() { return currentSnapshot(); },
-      onPlayerList() { if (isHost()) { dealEvenly(); host.broadcastState(makeSnapshot()); } },
+      onPlayerList() { if (isHost()) { reconcileActivePlayerTiles(); host.broadcastState(makeSnapshot()); } },
       restart() { if (isHost()) resetHostState(); },
     };
   }
