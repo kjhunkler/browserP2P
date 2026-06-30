@@ -16,7 +16,7 @@
     { key: "violet", name: "Lilac Aster", color: "#d9a6ff", center: "#ffe28f", petals: 12, design: "aster" },
     { key: "jade", name: "Jade Orchid", color: "#94d78d", center: "#f9ffd8", petals: 6, design: "orchid" },
   ];
-  const MOTIFS = ["lily", "koi", "duck", "reed", "ripple", "leaf"];
+  const MOTIFS = ["lily", "koi", "turtle", "dragonfly", "pads", "pondlife"];
   const DIRS = [
     { dx: 0, dy: -1, edge: 0, opp: 2 },
     { dx: 1, dy: 0, edge: 1, opp: 3 },
@@ -527,18 +527,18 @@
       const edges = rotatedEdges(tile, rot || 0);
       ctx.save();
       ctx.globalAlpha = alpha;
-      ctx.fillStyle = "rgba(174,218,212,0.94)";
+      ctx.fillStyle = "rgba(49,103,102,0.96)";
       drawRoundRect(x, y, size, size, size * 0.10);
       ctx.fill();
       const water = ctx.createRadialGradient(x + size * 0.35, y + size * 0.28, size * 0.08, x + size * 0.5, y + size * 0.5, size * 0.76);
-      water.addColorStop(0, "rgba(239,255,250,0.78)");
-      water.addColorStop(0.55, "rgba(91,162,177,0.92)");
-      water.addColorStop(1, "rgba(53,106,137,0.96)");
+      water.addColorStop(0, "rgba(48,132,139,0.96)");
+      water.addColorStop(0.52, "rgba(18,92,111,0.98)");
+      water.addColorStop(1, "rgba(8,55,81,0.99)");
       ctx.fillStyle = water;
       drawRoundRect(x + size * 0.055, y + size * 0.055, size * 0.89, size * 0.89, size * 0.08);
       ctx.fill();
 
-      ctx.strokeStyle = "rgba(255,255,255,0.20)";
+      ctx.strokeStyle = "rgba(189,245,232,0.20)";
       ctx.lineWidth = Math.max(1, size * 0.018);
       for (let i = 0; i < 3; i++) {
         ctx.beginPath();
@@ -546,6 +546,7 @@
         ctx.stroke();
       }
 
+      drawPondScatter(tile.id, x, y, size);
       drawMotif(tile.motif, x, y, size);
       drawEdgeFlower(x + size / 2, y, edges[0], 0, size);
       drawEdgeFlower(x + size, y + size / 2, edges[1], Math.PI / 2, size);
@@ -593,89 +594,188 @@
       ctx.restore();
     }
 
+    function tileSeed(id) {
+      let n = 0;
+      for (let i = 0; i < id.length; i++) n = (n * 31 + id.charCodeAt(i)) >>> 0;
+      return n || 1;
+    }
+
+    function seeded(seed, i) {
+      let n = (seed + i * 0x9e3779b9) >>> 0;
+      n ^= n << 13; n ^= n >>> 17; n ^= n << 5;
+      return ((n >>> 0) % 10000) / 10000;
+    }
+
+    function drawPondScatter(id, x, y, size) {
+      const seed = tileSeed(id);
+      const count = size > 58 ? 5 : 4;
+      for (let i = 0; i < count; i++) {
+        const px = x + size * (0.18 + seeded(seed, i * 4) * 0.64);
+        const py = y + size * (0.18 + seeded(seed, i * 4 + 1) * 0.64);
+        const s = size * (0.045 + seeded(seed, i * 4 + 2) * 0.035);
+        const a = seeded(seed, i * 4 + 3) * Math.PI * 2;
+        if (i % 5 === 0) drawMiniLilyPad(px, py, s * 1.9, a);
+        else if (i % 5 === 1) drawMiniKoi(px, py, s * 1.25, a);
+        else if (i % 5 === 2) drawMiniTurtle(px, py, s * 1.25, a);
+        else if (i % 5 === 3) drawMiniDragonfly(px, py, s * 1.15, a);
+        else drawMiniLilyPad(px, py, s * 1.6, a);
+      }
+    }
+
     function drawMotif(motif, x, y, size) {
       ctx.save();
       ctx.translate(x + size * 0.5, y + size * 0.52);
       if (motif === "koi") {
-        ctx.fillStyle = "rgba(255,198,150,0.72)";
-        ctx.beginPath(); ctx.ellipse(0, 0, size * 0.14, size * 0.055, -0.55, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = "rgba(255,244,220,0.62)";
-        ctx.beginPath(); ctx.ellipse(size * 0.10, -size * 0.04, size * 0.055, size * 0.025, -0.55, 0, Math.PI * 2); ctx.fill();
-      } else if (motif === "duck") {
-        ctx.fillStyle = "rgba(246,226,130,0.66)";
-        ctx.beginPath(); ctx.ellipse(0, size * 0.02, size * 0.13, size * 0.07, 0.2, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(size * 0.11, -size * 0.04, size * 0.045, 0, Math.PI * 2); ctx.fill();
-      } else if (motif === "reed") {
-        ctx.strokeStyle = "rgba(127,206,163,0.70)"; ctx.lineWidth = Math.max(1, size * 0.018);
-        for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.moveTo(i * size * 0.04, size * 0.16); ctx.quadraticCurveTo(i * size * 0.08, 0, i * size * 0.03, -size * 0.17); ctx.stroke(); }
+        drawMiniKoi(0, 0, size * 0.15, -0.55);
+      } else if (motif === "turtle") {
+        drawMiniTurtle(0, 0, size * 0.17, 0.2);
+      } else if (motif === "dragonfly") {
+        drawMiniDragonfly(0, 0, size * 0.17, -0.18);
       } else {
-        ctx.fillStyle = "rgba(139,213,151,0.64)";
-        ctx.beginPath(); ctx.ellipse(-size * 0.03, size * 0.02, size * 0.14, size * 0.08, -0.55, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = "rgba(52,105,82,0.36)"; ctx.beginPath(); ctx.moveTo(-size * 0.08, size * 0.06); ctx.lineTo(size * 0.07, -size * 0.03); ctx.stroke();
+        drawMiniLilyPad(-size * 0.06, size * 0.02, size * 0.18, -0.55);
+        drawMiniLilyPad(size * 0.12, -size * 0.08, size * 0.12, 0.85);
       }
+      ctx.restore();
+    }
+
+    function drawMiniLilyPad(x, y, r, angle) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.fillStyle = "rgba(77,174,113,0.76)";
+      ctx.strokeStyle = "rgba(184,241,182,0.48)";
+      ctx.lineWidth = Math.max(0.7, r * 0.10);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, r, 0.42, Math.PI * 1.86);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(24,91,67,0.45)";
+      ctx.lineWidth = Math.max(0.6, r * 0.055);
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(r * 0.72, -r * 0.18); ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawMiniKoi(x, y, s, angle) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.fillStyle = "rgba(255,225,186,0.88)";
+      ctx.beginPath(); ctx.ellipse(0, 0, s * 1.35, s * 0.58, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(236,92,57,0.86)";
+      ctx.beginPath(); ctx.ellipse(-s * 0.24, -s * 0.10, s * 0.45, s * 0.24, -0.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-s * 1.22, 0); ctx.lineTo(-s * 1.88, -s * 0.44); ctx.lineTo(-s * 1.72, 0); ctx.lineTo(-s * 1.88, s * 0.44); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "rgba(24,34,33,0.72)";
+      ctx.beginPath(); ctx.arc(s * 0.86, -s * 0.14, Math.max(1, s * 0.12), 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+
+    function drawMiniTurtle(x, y, s, angle) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.fillStyle = "rgba(83,151,96,0.82)";
+      ctx.beginPath(); ctx.ellipse(0, 0, s * 1.12, s * 0.82, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(126,190,115,0.80)";
+      ctx.beginPath(); ctx.arc(s * 1.10, 0, s * 0.34, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(47,112,78,0.78)";
+      for (const p of [[-0.62, -0.65], [-0.62, 0.65], [0.48, -0.65], [0.48, 0.65]]) {
+        ctx.beginPath(); ctx.ellipse(s * p[0], s * p[1], s * 0.34, s * 0.20, p[1] > 0 ? 0.65 : -0.65, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.strokeStyle = "rgba(217,249,186,0.38)";
+      ctx.lineWidth = Math.max(0.6, s * 0.10);
+      ctx.beginPath(); ctx.moveTo(-s * 0.58, 0); ctx.lineTo(s * 0.58, 0); ctx.moveTo(0, -s * 0.58); ctx.lineTo(0, s * 0.58); ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawMiniDragonfly(x, y, s, angle) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.fillStyle = "rgba(198,244,255,0.42)";
+      for (const p of [[-0.34, -0.48, -0.48], [0.34, -0.48, 0.48], [-0.28, 0.45, 0.45], [0.28, 0.45, -0.45]]) {
+        ctx.beginPath(); ctx.ellipse(s * p[0], s * p[1], s * 0.48, s * 0.20, p[2], 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.strokeStyle = "rgba(150,235,225,0.82)";
+      ctx.lineWidth = Math.max(0.8, s * 0.13);
+      ctx.beginPath(); ctx.moveTo(0, -s * 0.82); ctx.lineTo(0, s * 0.88); ctx.stroke();
+      ctx.fillStyle = "rgba(42,92,90,0.84)";
+      ctx.beginPath(); ctx.arc(0, -s * 0.95, s * 0.20, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
     }
 
     function drawEdgeFlower(cx, cy, colorKey, angle, size) {
       const def = blossom(colorKey);
+      const radius = size * 0.44;
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate(angle);
       ctx.beginPath();
-      ctx.rect(-size * 0.30, 0, size * 0.60, size * 0.34);
+      ctx.rect(-radius, 0, radius * 2, radius * 1.08);
       ctx.clip();
       drawFlowerPetals(def, size);
+      ctx.strokeStyle = "rgba(255,255,255,0.34)";
+      ctx.lineWidth = Math.max(1, size * 0.012);
+      ctx.beginPath();
+      ctx.arc(0, 0, radius * 0.83, 0, Math.PI);
+      ctx.stroke();
       ctx.fillStyle = def.center;
       ctx.beginPath();
-      if (def.design === "iris") ctx.ellipse(0, 0, size * 0.030, size * 0.055, 0, 0, Math.PI * 2);
-      else if (def.design === "orchid") ctx.ellipse(0, 0, size * 0.060, size * 0.034, 0, 0, Math.PI * 2);
-      else ctx.arc(0, 0, size * (def.design === "poppy" ? 0.058 : 0.046), 0, Math.PI * 2);
+      if (def.design === "iris") ctx.ellipse(0, 0, size * 0.050, size * 0.084, 0, 0, Math.PI * 2);
+      else if (def.design === "orchid") ctx.ellipse(0, 0, size * 0.088, size * 0.056, 0, 0, Math.PI * 2);
+      else ctx.arc(0, 0, size * (def.design === "poppy" ? 0.082 : 0.068), 0, Math.PI * 2);
       ctx.fill();
       ctx.strokeStyle = "rgba(40,31,26,0.35)";
       ctx.lineWidth = Math.max(0.8, size * 0.007);
       ctx.stroke();
-      if (def.design === "anemone") drawStamens(size, 10, "#eaf6ff");
-      else if (def.design === "poppy") drawStamens(size, 7, "#2b1d1b");
-      else if (def.design === "aster") drawStamens(size, 9, "#fff4b5");
+      if (def.design === "anemone") drawStamens(size, 12, "#eaf6ff", 0.12);
+      else if (def.design === "poppy") drawStamens(size, 10, "#2b1d1b", 0.11);
+      else if (def.design === "aster") drawStamens(size, 13, "#fff4b5", 0.12);
+      else drawStamens(size, 6, "rgba(255,255,225,0.70)", 0.09);
       ctx.strokeStyle = "rgba(255,255,255,0.72)";
       ctx.lineWidth = Math.max(1, size * 0.010);
       ctx.beginPath();
-      ctx.moveTo(-size * 0.25, 0);
-      ctx.lineTo(size * 0.25, 0);
+      ctx.moveTo(-radius, 0);
+      ctx.lineTo(radius, 0);
       ctx.stroke();
       ctx.restore();
     }
 
     function drawFlowerPetals(def, size) {
       if (def.design === "lotus") {
-        drawPetalFan(def, size, 7, 0.080, 0.175, "point", 0);
-        drawPetalFan(def, size, 5, 0.052, 0.125, "round", Math.PI / 7);
+        drawPetalRing(def, size, 12, 0.074, 0.315, "point", 0);
+        drawPetalRing(def, size, 8, 0.060, 0.215, "round", Math.PI / 8);
       } else if (def.design === "iris") {
-        drawPetalAt(-0.17, 0.090, -0.52, size, def, 0.050, 0.185, "point");
-        drawPetalAt(0, 0.125, 0, size, def, 0.068, 0.210, "point");
-        drawPetalAt(0.17, 0.090, 0.52, size, def, 0.050, 0.185, "point");
-        drawPetalAt(-0.075, 0.038, -0.25, size, def, 0.067, 0.100, "wide");
-        drawPetalAt(0.075, 0.038, 0.25, size, def, 0.067, 0.100, "wide");
+        drawPetalRing(def, size, 6, 0.070, 0.300, "point", 0);
+        drawPetalRing(def, size, 6, 0.060, 0.185, "wide", Math.PI / 6);
       } else if (def.design === "lily") {
-        drawPetalFan(def, size, 6, 0.052, 0.235, "long", 0);
-        drawStamens(size, 4, "#c9852f", 0.13);
+        drawPetalRing(def, size, 6, 0.072, 0.355, "long", 0);
+        drawPetalRing(def, size, 6, 0.050, 0.250, "point", Math.PI / 6);
       } else if (def.design === "clover") {
         for (let i = 0; i < 4; i++) {
-          const a = i * Math.PI / 3;
-          drawPetalAt(Math.cos(a) * 0.078, Math.sin(a) * 0.078, a, size, def, 0.080, 0.095, "heart");
+          const a = i * Math.PI / 2;
+          drawPetalAt(Math.cos(a) * 0.112, Math.sin(a) * 0.112, a, size, def, 0.118, 0.178, "heart");
         }
       } else if (def.design === "anemone") {
-        drawPetalFan(def, size, 10, 0.045, 0.155, "round", 0);
+        drawPetalRing(def, size, 16, 0.050, 0.250, "round", 0);
+        drawPetalRing(def, size, 16, 0.034, 0.180, "round", Math.PI / 16);
       } else if (def.design === "poppy") {
-        drawPetalFan(def, size, 5, 0.100, 0.135, "wide", Math.PI / 10);
+        drawPetalRing(def, size, 5, 0.150, 0.255, "wide", Math.PI / 10);
+        drawPetalRing(def, size, 5, 0.094, 0.185, "wide", Math.PI / 5);
       } else if (def.design === "aster") {
-        drawPetalFan(def, size, 13, 0.027, 0.190, "needle", 0);
+        drawPetalRing(def, size, 22, 0.024, 0.330, "needle", 0);
+        drawPetalRing(def, size, 22, 0.020, 0.235, "needle", Math.PI / 22);
       } else if (def.design === "orchid") {
-        drawPetalAt(0, 0.145, 0, size, def, 0.085, 0.190, "long");
-        drawPetalAt(-0.140, 0.082, -0.70, size, def, 0.064, 0.150, "long");
-        drawPetalAt(0.140, 0.082, 0.70, size, def, 0.064, 0.150, "long");
-        drawPetalAt(-0.065, 0.040, -0.22, size, def, 0.056, 0.100, "round");
-        drawPetalAt(0.065, 0.040, 0.22, size, def, 0.056, 0.100, "round");
+        drawPetalRing(def, size, 3, 0.110, 0.310, "long", -Math.PI / 2);
+        drawPetalRing(def, size, 3, 0.074, 0.205, "round", Math.PI / 2);
+      }
+    }
+
+    function drawPetalRing(def, size, count, width, length, shape, offset) {
+      for (let i = 0; i < count; i++) {
+        const a = offset + i * Math.PI * 2 / count;
+        drawPetalAt(Math.cos(a) * 0.062, Math.sin(a) * 0.062, a, size, def, width, length, shape);
       }
     }
 
