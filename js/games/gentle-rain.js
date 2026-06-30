@@ -44,10 +44,10 @@
     let seenEventSeq = 0;
     let ui = { board: null, hand: null, handTile: null, deck: null, reset: null, cells: new Map(), scale: 1 };
     let drag = null;
-    let rotateAnim = null;
     let drawAnim = null;
     let boardGesture = null;
     let lastTapAt = 0;
+    let handMessage = { text: "", previous: "", changedAt: 0, duration: 520 };
     const activePointers = new Map();
     const view = { zoom: 1, rot: 0, panX: 0, panY: 0 };
     const events = [];
@@ -371,11 +371,6 @@
 
     function easeOutCubic(t) { return 1 - Math.pow(1 - clamp(t, 0, 1), 3); }
 
-    function startRotateAnimation(tile, fromRot, toRot) {
-      if (!tile) return;
-      rotateAnim = { tileId: tile.id, start: now(), duration: 260, from: fromRot || 0, to: toRot || 0 };
-    }
-
     function startDrawAnimation(tile) {
       if (!tile || !ui.deck || !ui.handTile) return;
       drawAnim = { tileId: tile.id, start: now(), duration: 420 };
@@ -385,10 +380,8 @@
       if (!isHost() || !input || typeof input !== "object") return;
       if (input.type === "rotate" && currentFor(id) && !state.over) {
         const current = currentFor(id);
-        const fromRot = current.rot || 0;
         current.rot = ((current.rot || 0) + 1) % 4;
         state.message = "The tile turns softly in your hands.";
-        if (id === myId) startRotateAnimation(current.tile, fromRot, current.rot || 0);
       } else if (input.type === "place") {
         placeTile(id, Math.round(input.x), Math.round(input.y));
         if (id === myId) startDrawAnimation(currentFor(id)?.tile);
@@ -410,9 +403,7 @@
       const current = currentFor();
       if (!current?.tile || state.over) return;
       if (!isHost()) {
-        const fromRot = current.rot || 0;
         current.rot = ((current.rot || 0) + 1) % 4;
-        startRotateAnimation(current.tile, fromRot, current.rot || 0);
         if (drag?.tile === current.tile) drag.rot = current.rot;
       }
       sendAction({ type: "rotate" });
@@ -524,7 +515,7 @@
 
     function layout(W, H) {
       const top = Math.max(112, Math.min(144, H * 0.20));
-      const handH = Math.max(132, Math.min(168, H * 0.23));
+      const handH = Math.max(170, Math.min(218, H * 0.30));
       const margin = Math.max(12, Math.min(22, W * 0.04));
       const board = { x: margin, y: top, w: W - margin * 2, h: H - top - handH - margin };
       const bounds = boardBounds();
@@ -533,11 +524,13 @@
       const cell = Math.max(24, Math.min(board.w / cols, board.h / rows));
       const cx = board.x + board.w / 2 + view.panX;
       const cy = board.y + board.h / 2 + view.panY;
+      const handTileSize = Math.min(112, Math.max(78, handH - 88));
+      const handTileY = H - handH + 72;
       ui = {
         board,
         hand: { x: margin, y: H - handH + 10, w: W - margin * 2, h: handH - 18 },
-        deck: { x: margin + 24, y: H - handH + 34, w: Math.min(104, handH - 28), h: Math.min(104, handH - 28) },
-        handTile: { x: W - margin - Math.min(104, handH - 28) - 24, y: H - handH + 34, w: Math.min(104, handH - 28), h: Math.min(104, handH - 28) },
+        deck: { x: margin + 24, y: handTileY, w: handTileSize, h: handTileSize },
+        handTile: { x: W - margin - handTileSize - 24, y: handTileY, w: handTileSize, h: handTileSize },
         reset: { x: margin, y: 52, w: 84, h: 32 },
         cells: new Map(),
         scale: cell,
@@ -790,9 +783,6 @@
       ctx.textBaseline = "middle";
       ctx.font = "900 20px system-ui, sans-serif";
       ctx.fillText(String(count), r.x + r.w / 2 - 6, r.y + r.h / 2 - 4);
-      ctx.font = "11px system-ui, sans-serif";
-      ctx.fillStyle = "rgba(235,255,249,0.72)";
-      ctx.fillText("deck", r.x + r.w / 2 - 6, r.y + r.h + 8);
       ctx.restore();
     }
 
@@ -1118,11 +1108,7 @@
       ctx.strokeStyle = "rgba(216,242,255,0.13)";
       ctx.stroke();
 
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-      ctx.fillStyle = "rgba(239,252,255,0.88)";
-      ctx.font = "700 13px system-ui, sans-serif";
-      ctx.fillText(state.message, h.x + h.w / 2, h.y + 12, Math.max(160, h.w - 220));
+      drawHandMessage(h);
 
       const current = currentFor();
       if (drag?.tile) drawHandTileSlot(true);
@@ -1153,15 +1139,35 @@
       ctx.restore();
     }
 
+    function drawHandMessage(h) {
+      const text = state.message || "";
+      const t = now();
+      if (handMessage.text !== text) {
+        handMessage.previous = handMessage.text;
+        handMessage.text = text;
+        handMessage.changedAt = t;
+      }
+      const p = clamp((t - handMessage.changedAt) / handMessage.duration, 0, 1);
+      const oldAlpha = handMessage.previous && p < 0.5 ? 1 - p * 2 : 0;
+      const newAlpha = p < 0.5 ? 0 : (p - 0.5) * 2;
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "700 14px system-ui, sans-serif";
+      if (oldAlpha > 0) {
+        ctx.globalAlpha = oldAlpha;
+        ctx.fillStyle = "rgba(239,252,255,0.88)";
+        ctx.fillText(handMessage.previous, h.x + h.w / 2, h.y + 26, Math.max(160, h.w - 220));
+      }
+      ctx.globalAlpha = handMessage.changedAt ? newAlpha : 1;
+      ctx.fillStyle = "rgba(239,252,255,0.88)";
+      ctx.fillText(handMessage.text, h.x + h.w / 2, h.y + 26, Math.max(160, h.w - 220));
+      ctx.restore();
+    }
+
     function drawAnimatedActiveTile(tile, rot, x, y, size) {
-      let drawRot = rot;
       let scaleX = 1;
       let alpha = 1;
-      if (rotateAnim?.tileId === tile.id) {
-        const t = (now() - rotateAnim.start) / rotateAnim.duration;
-        if (t >= 1) rotateAnim = null;
-        else drawRot = rotateAnim.from + (rotateAnim.to - rotateAnim.from || 1) * easeOutCubic(t);
-      }
       if (drawAnim?.tileId === tile.id) {
         const t = (now() - drawAnim.start) / drawAnim.duration;
         if (t >= 1) drawAnim = null;
@@ -1179,7 +1185,7 @@
       ctx.save();
       ctx.translate(x + size / 2, y + size / 2);
       ctx.scale(Math.max(0.14, scaleX), 1);
-      drawTile(tile, drawRot, -size / 2, -size / 2, size, alpha, null);
+      drawTile(tile, rot, -size / 2, -size / 2, size, alpha, null);
       ctx.restore();
     }
 
