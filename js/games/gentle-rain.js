@@ -547,7 +547,6 @@
       }
 
       drawMotif(tile.motif, x, y, size);
-      drawCornerCutouts(x, y, size);
       drawEdgeFlower(x + size / 2, y, edges[0], 0, size);
       drawEdgeFlower(x + size, y + size / 2, edges[1], Math.PI / 2, size);
       drawEdgeFlower(x + size / 2, y + size, edges[2], Math.PI, size);
@@ -617,22 +616,13 @@
       ctx.restore();
     }
 
-    function drawCornerCutouts(x, y, size) {
-      ctx.fillStyle = "rgba(13,32,45,0.55)";
-      for (const [cx, cy] of [[x, y], [x + size, y], [x + size, y + size], [x, y + size]]) {
-        ctx.beginPath();
-        ctx.arc(cx, cy, size * 0.15, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-
     function drawEdgeFlower(cx, cy, colorKey, angle, size) {
       const def = blossom(colorKey);
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate(angle);
       ctx.beginPath();
-      ctx.rect(-size * 0.24, 0, size * 0.48, size * 0.24);
+      ctx.rect(-size * 0.30, 0, size * 0.60, size * 0.34);
       ctx.clip();
       drawFlowerPetals(def, size);
       ctx.fillStyle = def.center;
@@ -650,49 +640,49 @@
       ctx.strokeStyle = "rgba(255,255,255,0.72)";
       ctx.lineWidth = Math.max(1, size * 0.010);
       ctx.beginPath();
-      ctx.moveTo(-size * 0.19, 0);
-      ctx.lineTo(size * 0.19, 0);
+      ctx.moveTo(-size * 0.25, 0);
+      ctx.lineTo(size * 0.25, 0);
       ctx.stroke();
       ctx.restore();
     }
 
     function drawFlowerPetals(def, size) {
       if (def.design === "lotus") {
-        drawPetalFan(def, size, 7, 0.062, 0.120, "point", 0);
-        drawPetalFan(def, size, 5, 0.038, 0.087, "round", Math.PI / 7);
+        drawPetalFan(def, size, 7, 0.080, 0.175, "point", 0);
+        drawPetalFan(def, size, 5, 0.052, 0.125, "round", Math.PI / 7);
       } else if (def.design === "iris") {
-        drawPetalAt(-0.13, 0.070, -0.52, size, def, 0.036, 0.135, "point");
-        drawPetalAt(0, 0.095, 0, size, def, 0.050, 0.160, "point");
-        drawPetalAt(0.13, 0.070, 0.52, size, def, 0.036, 0.135, "point");
-        drawPetalAt(-0.055, 0.030, -0.25, size, def, 0.050, 0.070, "wide");
-        drawPetalAt(0.055, 0.030, 0.25, size, def, 0.050, 0.070, "wide");
+        drawPetalAt(-0.17, 0.090, -0.52, size, def, 0.050, 0.185, "point");
+        drawPetalAt(0, 0.125, 0, size, def, 0.068, 0.210, "point");
+        drawPetalAt(0.17, 0.090, 0.52, size, def, 0.050, 0.185, "point");
+        drawPetalAt(-0.075, 0.038, -0.25, size, def, 0.067, 0.100, "wide");
+        drawPetalAt(0.075, 0.038, 0.25, size, def, 0.067, 0.100, "wide");
       } else if (def.design === "lily") {
-        drawPetalFan(def, size, 6, 0.035, 0.165, "long", 0);
-        drawStamens(size, 4, "#c9852f", 0.09);
+        drawPetalFan(def, size, 6, 0.052, 0.235, "long", 0);
+        drawStamens(size, 4, "#c9852f", 0.13);
       } else if (def.design === "clover") {
         for (let i = 0; i < 4; i++) {
           const a = i * Math.PI / 3;
-          drawPetalAt(Math.cos(a) * 0.055, Math.sin(a) * 0.055, a, size, def, 0.055, 0.065, "heart");
+          drawPetalAt(Math.cos(a) * 0.078, Math.sin(a) * 0.078, a, size, def, 0.080, 0.095, "heart");
         }
       } else if (def.design === "anemone") {
-        drawPetalFan(def, size, 10, 0.030, 0.105, "round", 0);
+        drawPetalFan(def, size, 10, 0.045, 0.155, "round", 0);
       } else if (def.design === "poppy") {
-        drawPetalFan(def, size, 5, 0.070, 0.090, "wide", Math.PI / 10);
+        drawPetalFan(def, size, 5, 0.100, 0.135, "wide", Math.PI / 10);
       } else if (def.design === "aster") {
-        drawPetalFan(def, size, 13, 0.018, 0.128, "needle", 0);
+        drawPetalFan(def, size, 13, 0.027, 0.190, "needle", 0);
       } else if (def.design === "orchid") {
-        drawPetalAt(0, 0.105, 0, size, def, 0.060, 0.135, "long");
-        drawPetalAt(-0.105, 0.060, -0.70, size, def, 0.046, 0.105, "long");
-        drawPetalAt(0.105, 0.060, 0.70, size, def, 0.046, 0.105, "long");
-        drawPetalAt(-0.045, 0.030, -0.22, size, def, 0.040, 0.070, "round");
-        drawPetalAt(0.045, 0.030, 0.22, size, def, 0.040, 0.070, "round");
+        drawPetalAt(0, 0.145, 0, size, def, 0.085, 0.190, "long");
+        drawPetalAt(-0.140, 0.082, -0.70, size, def, 0.064, 0.150, "long");
+        drawPetalAt(0.140, 0.082, 0.70, size, def, 0.064, 0.150, "long");
+        drawPetalAt(-0.065, 0.040, -0.22, size, def, 0.056, 0.100, "round");
+        drawPetalAt(0.065, 0.040, 0.22, size, def, 0.056, 0.100, "round");
       }
     }
 
     function drawPetalFan(def, size, count, width, length, shape, offset) {
       for (let i = 0; i < count; i++) {
         const a = offset + i * Math.PI / Math.max(1, count - 1);
-        drawPetalAt(Math.cos(a) * 0.064, Math.sin(a) * 0.064, a, size, def, width, length, shape);
+        drawPetalAt(Math.cos(a) * 0.088, Math.sin(a) * 0.088, a, size, def, width, length, shape);
       }
     }
 
@@ -762,14 +752,14 @@
         const { x, y } = parseKey(k);
         const p = gridToScreen(x, y);
         ui.cells.set(k, { x: p.x, y: p.y, w: ui.scale, h: ui.scale });
-        const hovering = k === hoverKey;
-        ctx.fillStyle = hovering ? "rgba(211,255,244,0.26)" : "rgba(211,255,244,0.08)";
-        ctx.strokeStyle = hovering ? "rgba(235,255,249,0.92)" : "rgba(211,255,244,0.30)";
-        ctx.lineWidth = hovering ? 3 : 1.5;
+        if (k !== hoverKey) continue;
+        ctx.fillStyle = "rgba(211,255,244,0.26)";
+        ctx.strokeStyle = "rgba(235,255,249,0.92)";
+        ctx.lineWidth = 3;
         drawRoundRect(p.x + 4, p.y + 4, ui.scale - 8, ui.scale - 8, ui.scale * 0.10);
         ctx.fill();
         ctx.stroke();
-        if (hovering && current?.tile) drawTile(current.tile, current.rot || 0, p.x + 1, p.y + 1, ui.scale - 2, 0.28, null);
+        if (current?.tile) drawTile(current.tile, current.rot || 0, p.x + 1, p.y + 1, ui.scale - 2, 0.28, null);
       }
 
       for (const b of state.blossoms) {
@@ -930,7 +920,7 @@
       const p = pointerPoint(e);
       drag.x = p.x;
       drag.y = p.y;
-      drag.hover = nearestEmptyCell(p.x, p.y, ui.scale * 0.82);
+      drag.hover = nearestEmptyCell(p.x, p.y, ui.scale * 0.36);
     }
 
     function onPointerUp(e) {
