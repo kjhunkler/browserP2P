@@ -43,9 +43,11 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.4.7";
+const APP_VERSION = "2.5.6";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
+const LAST_GAME_KEY = "bp2p-last-game";
+const RESTORE_PLAY_KEY = "bp2p-restore-play";
 
 // Channel scopes the auto-join host id. Empty = global default.
 const AUTO_CHANNEL = "";
@@ -380,6 +382,8 @@ function wireNetEvents() {
     }
     migratingFromHostId = null;
     startHostLoop();
+    const restoreGame = !lastState.length && selectedGame === "free-play" ? rememberedGameOrDefault() : null;
+    if (restoreGame) await setGameMode(restoreGame, false, savedGameStateOrNull(restoreGame), false).catch(console.error);
     if (selectedGame !== "free-play") {
       if (!activeGame) await startActiveGame(pendingMigratedGameState || loadSavedGameState(selectedGame)?.state || null).catch(console.error);
       else if (pendingMigratedGameState) activeGame.onState?.(pendingMigratedGameState);
@@ -393,7 +397,9 @@ function wireNetEvents() {
     pendingMigratedGameState = null;
     announceCameraOn();
     renderLobby();
-    show(keepPlayingAfterMigration ? "play" : "lobby");
+    const restorePlay = keepPlayingAfterMigration || shouldRestorePlay();
+    show(restorePlay ? "play" : "lobby");
+    playStarted = restorePlay;
     keepPlayingAfterMigration = false;
   });
 
@@ -993,6 +999,24 @@ function savedGameStateOrNull(game) {
   return loadSavedGameState(game)?.state || null;
 }
 
+function rememberGamePlayed(game) {
+  if (!game || game === "free-play") return;
+  try { localStorage.setItem(LAST_GAME_KEY, game); } catch {}
+}
+
+function rememberedGameOrDefault() {
+  const saved = localStorage.getItem(LAST_GAME_KEY);
+  return saved && window.BP2PGames?.[saved] ? saved : null;
+}
+
+function shouldRestorePlay() {
+  return localStorage.getItem(RESTORE_PLAY_KEY) === "1";
+}
+
+function setRestorePlay(value) {
+  try { localStorage.setItem(RESTORE_PLAY_KEY, value ? "1" : "0"); } catch {}
+}
+
 function gameName(game) {
   return window.BP2PGames?.[game]?.name || game;
 }
@@ -1002,6 +1026,7 @@ async function setGameMode(game, broadcast = true, restoredState = undefined, pr
   if (selectedGame === nextGame && (nextGame === "free-play" || activeGame)) return;
   stopActiveGame();
   selectedGame = nextGame;
+  rememberGamePlayed(selectedGame);
   const select = $("#game-select");
   if (select && select.value !== selectedGame) select.value = selectedGame;
   if (selectedGame !== "free-play") setDrawMode(false);
@@ -1735,6 +1760,7 @@ function leaveLobby() {
   keepPlayingAfterMigration = false;
   yieldedHostForBackground = false;
   playStarted = false;
+  setRestorePlay(false);
   stopHostLoop();
   stopLiveVoice();
   stopCamera();
@@ -1758,6 +1784,8 @@ function leaveLobby() {
 
 function startPlaying(broadcast = true) {
   playStarted = true;
+  setRestorePlay(true);
+  rememberGamePlayed(selectedGame);
   show("play");
   if (broadcast && net.isHost) net.broadcast({ t: "play" });
 }
@@ -2099,7 +2127,8 @@ $("#draw-size")?.addEventListener("input", (e) => setDrawSize(e.target.value));
 $("#btn-draw-undo")?.addEventListener("click", undoDrawing);
 $("#btn-draw-redo")?.addEventListener("click", redoDrawing);
 $("#btn-draw-clear")?.addEventListener("click", clearDrawingWithConfirmation);
-setGameMode($("#game-select")?.value || "free-play").catch(console.error);
+const startupGame = rememberedGameOrDefault() || $("#game-select")?.value || "free-play";
+setGameMode(startupGame).catch(console.error);
 syncDrawToolUi();
 
 // Auto-join from QR link (?join=CODE).

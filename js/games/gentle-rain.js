@@ -43,7 +43,7 @@
 
   function create(host, initialState) {
     const canvas = host.canvas;
-    const ctx = canvas.getContext("2d");
+    let ctx = canvas.getContext("2d");
     const myId = host.myId;
 
     let rafId = 0;
@@ -66,6 +66,7 @@
     const activePointers = new Map();
     const view = { zoom: 1, rot: 0, panX: 0, panY: 0 };
     const events = [];
+    const pond = { tileIds: new Set(), entities: [], ripples: [] };
     const drops = [];
     const ripples = [];
     const particles = [];
@@ -554,6 +555,9 @@
       state.won = !!snapshot.won;
       state.message = snapshot.message || "Listen to the rain and place the next tile.";
       applyEvents(snapshot.events);
+      pond.tileIds.clear();
+      pond.entities = [];
+      pond.ripples = [];
     }
 
     function ensureCanvasSize() {
@@ -639,6 +643,236 @@
       };
     }
 
+    function pondCellAt(x, y) {
+      return state.board[key(Math.floor(x + 0.5), Math.floor(y + 0.5))] || null;
+    }
+
+    function inPond(x, y) {
+      return !!pondCellAt(x, y);
+    }
+
+    function nearPlacedPondTile(x, y, pad = 0) {
+      const cx = Math.floor(x + 0.5), cy = Math.floor(y + 0.5);
+      for (let yy = cy - 1; yy <= cy + 1; yy++) {
+        for (let xx = cx - 1; xx <= cx + 1; xx++) {
+          if (!state.board[key(xx, yy)]) continue;
+          if (x >= xx - 0.5 - pad && x <= xx + 0.5 + pad && y >= yy - 0.5 - pad && y <= yy + 0.5 + pad) return true;
+        }
+      }
+      return false;
+    }
+
+    function pondCenter() {
+      const pts = Object.keys(state.board).map(parseKey);
+      if (!pts.length) return { x: 0.5, y: 0.5 };
+      return { x: pts.reduce((sum, p) => sum + p.x + 0.5, 0) / pts.length, y: pts.reduce((sum, p) => sum + p.y + 0.5, 0) / pts.length };
+    }
+
+    function syncPondLife() {
+      for (const [k, cell] of Object.entries(state.board)) {
+        const id = cell?.tile?.id || k;
+        if (pond.tileIds.has(id)) continue;
+        pond.tileIds.add(id);
+        spawnPondLifeForTile(k, id);
+      }
+      for (const id of [...pond.tileIds]) {
+        const stillPlaced = Object.values(state.board).some((cell) => cell?.tile?.id === id);
+        if (!stillPlaced) pond.tileIds.delete(id);
+      }
+      pond.entities = pond.entities.filter((e) => nearPlacedPondTile(e.x, e.y, 1.35));
+    }
+
+    function spawnPondLifeForTile(k, id) {
+      const cell = parseKey(k);
+      const seed = tileSeed(id);
+      const roll = seeded(seed, 3);
+      addPondEntity("pad", cell, seed, 0, 0.00022, 0.065);
+      if (roll > 0.72) addPondEntity("koi", cell, seed, 1, 0.0010 + seeded(seed, 16) * 0.0014, 0.035);
+      else if (roll > 0.62) addPondEntity("shadow", cell, seed, 2, 0.004 + seeded(seed, 18) * 0.005, 0.025);
+      else if (roll > 0.42) addPondEntity("bug", cell, seed, 3, 0.0045, 0.030, seeded(seed, 19) > 0.55 ? "dragonfly" : "butterfly");
+      if (seeded(seed, 8) > 0.88) addPondEntity("turtle", cell, seed, 4, 0.0022 / 3, 0.045);
+    }
+
+    function addPondEntity(type, cell, seed, i, speed, radius, bugKind = null) {
+      const a = seeded(seed, i + 30) * Math.PI * 2;
+      pond.entities.push({
+        type,
+        bugKind,
+        x: cell.x - 0.32 + seeded(seed, i * 5 + 1) * 0.64,
+        y: cell.y - 0.32 + seeded(seed, i * 5 + 2) * 0.64,
+        vx: Math.cos(a) * speed,
+        vy: Math.sin(a) * speed,
+        speed,
+        baseSpeed: speed,
+        burstUntil: 0,
+        radius: type === "pad" ? radius * (1 + seeded(seed, i * 5 + 4) * 1.3) : radius,
+        spin: type === "pad" ? (seeded(seed, i * 5 + 6) - 0.5) * 0.00008 : 0,
+        angle: a,
+        seed: seed + i * 97,
+        turnAt: 0,
+        landedOn: null,
+      });
+    }
+
+    function updatePondLife(dt) {
+      syncPondLife();
+      const t = now();
+      const step = Math.min(3, Math.max(0.2, dt / 16.67));
+      for (const e of pond.entities) {
+        if (e.type === "pad") updatePad(e, step, t);
+        else if (e.type === "bug") updateBug(e, step, t);
+        else updateSwimmer(e, step, t);
+      }
+      resolvePondCollisions(t);
+      updatePondRipples(dt);
+      if (Math.random() < 0.020) addRandomPondRipple();
+    }
+
+    function updatePad(e, step, t) {
+      gentleSteer(e, t, 0.00035);
+      e.x += e.vx * step;
+      e.y += e.vy * step;
+      e.angle += e.spin * step * 16.67;
+      steerIntoPond(e, t, 0.0008);
+    }
+
+    function updateSwimmer(e, step, t) {
+      updateSwimmerSpeed(e, t);
+      gentleSteer(e, t, e.type === "koi" ? 0.0022 : 0.0010);
+      avoidSolidPondLife(e, e.type === "koi" ? 0.0018 : 0.0028);
+      e.x += e.vx * step;
+      e.y += e.vy * step;
+      steerIntoPond(e, t, e.type === "koi" ? 0.006 : 0.0025);
+    }
+
+    function updateSwimmerSpeed(e, t) {
+      if (e.type !== "koi") return;
+      if (t < e.burstUntil) return;
+      e.speed = e.baseSpeed;
+      if (seeded(e.seed, Math.floor(t / 2400)) > 0.982) {
+        e.speed = e.baseSpeed * (2.4 + seeded(e.seed, Math.floor(t / 1900) + 21) * 2.0);
+        e.burstUntil = t + 900 + seeded(e.seed, Math.floor(t / 1700) + 22) * 1500;
+      }
+      normalizeVelocity(e);
+    }
+
+    function updateBug(e, step, t) {
+      const target = e.landedOn && pond.entities.includes(e.landedOn) ? e.landedOn : null;
+      if (target && t < e.turnAt) {
+        e.x += (target.x - e.x) * 0.08;
+        e.y += (target.y - e.y) * 0.08;
+        e.angle = e.angle || Math.atan2(e.vy, e.vx);
+        return;
+      }
+      e.landedOn = null;
+      const landing = pond.entities.find((o) => (o.type === "pad" || o.type === "turtle") && Math.hypot(o.x - e.x, o.y - e.y) < o.radius + 0.05);
+      if (landing && seeded(e.seed, Math.floor(t / 2000)) > 0.985) {
+        e.landedOn = landing;
+        e.turnAt = t + 2600 + seeded(e.seed, 42) * 4200;
+        addPondRipple(e.x, e.y, 0.07);
+        return;
+      }
+      gentleSteer(e, t, 0.003);
+      e.x += e.vx * step;
+      e.y += e.vy * step;
+      steerIntoPond(e, t, 0.004);
+    }
+
+    function moveWithinPlacedPond(e, step, t) {
+      const nx = e.x + e.vx * step;
+      const ny = e.y + e.vy * step;
+      if (inPond(nx, ny)) {
+        e.x = nx;
+        e.y = ny;
+        return;
+      }
+      const cx = Math.floor(e.x + 0.5), cy = Math.floor(e.y + 0.5);
+      const jitter = (seeded(e.seed, Math.floor(t / 700)) - 0.5) * Math.PI * 0.55;
+      const a = Math.atan2(cy - e.y, cx - e.x) + jitter;
+      e.vx = Math.cos(a) * e.speed;
+      e.vy = Math.sin(a) * e.speed;
+      e.x = clamp(e.x, cx - 0.48 + e.radius, cx + 0.48 - e.radius);
+      e.y = clamp(e.y, cy - 0.48 + e.radius, cy + 0.48 - e.radius);
+    }
+
+    function gentleSteer(e, t, amount) {
+      if (t < e.turnAt) return;
+      e.turnAt = t + 1600 + seeded(e.seed, Math.floor(t / 1700)) * 3200;
+      const current = Math.atan2(e.vy, e.vx);
+      const a = current + (seeded(e.seed, Math.floor(t / 900) + 11) - 0.5) * Math.PI * 0.55;
+      e.vx += Math.cos(a) * amount;
+      e.vy += Math.sin(a) * amount;
+      normalizeVelocity(e);
+    }
+
+    function steerIntoPond(e, t, amount) {
+      if (nearPlacedPondTile(e.x, e.y, 0.85)) return;
+      const c = pondCenter();
+      const a = Math.atan2(c.y - e.y, c.x - e.x) + (seeded(e.seed, Math.floor(t / 1300)) - 0.5) * 0.8;
+      e.vx += Math.cos(a) * amount;
+      e.vy += Math.sin(a) * amount;
+      normalizeVelocity(e);
+    }
+
+    function avoidSolidPondLife(e, amount) {
+      for (const o of pond.entities) {
+        if (o === e || (o.type !== "pad" && o.type !== "turtle")) continue;
+        const dx = e.x - o.x, dy = e.y - o.y;
+        const d = Math.hypot(dx, dy) || 1;
+        const minD = e.radius + o.radius + (e.type === "koi" ? 0.08 : 0.02);
+        if (d >= minD) continue;
+        e.vx += dx / d * amount;
+        e.vy += dy / d * amount;
+      }
+      normalizeVelocity(e);
+    }
+
+    function resolvePondCollisions(t) {
+      for (let i = 0; i < pond.entities.length; i++) {
+        const a = pond.entities[i];
+        if (a.type !== "pad" && a.type !== "turtle") continue;
+        for (let j = i + 1; j < pond.entities.length; j++) {
+          const b = pond.entities[j];
+          if (b.type !== "pad" && b.type !== "turtle") continue;
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const d = Math.hypot(dx, dy) || 1;
+          const minD = a.radius + b.radius;
+          if (d >= minD) continue;
+          const push = (minD - d) * 0.5;
+          a.x -= dx / d * push; a.y -= dy / d * push;
+          b.x += dx / d * push; b.y += dy / d * push;
+          if (!a.lastRippleAt || t - a.lastRippleAt > 1800) {
+            addPondRipple((a.x + b.x) / 2, (a.y + b.y) / 2, 0.08);
+            a.lastRippleAt = b.lastRippleAt = t;
+          }
+        }
+      }
+    }
+
+    function normalizeVelocity(e) {
+      const d = Math.hypot(e.vx, e.vy) || 1;
+      e.vx = e.vx / d * e.speed;
+      e.vy = e.vy / d * e.speed;
+    }
+
+    function addPondRipple(x, y, r = 0.08) {
+      if (!inPond(x, y)) return;
+      pond.ripples.push({ x, y, r, life: 0, max: 1600 });
+      while (pond.ripples.length > 48) pond.ripples.shift();
+    }
+
+    function addRandomPondRipple() {
+      const cells = Object.keys(state.board);
+      if (!cells.length) return;
+      const p = parseKey(cells[Math.floor(Math.random() * cells.length)]);
+      addPondRipple(p.x - 0.35 + Math.random() * 0.70, p.y - 0.35 + Math.random() * 0.70, 0.035 + Math.random() * 0.04);
+    }
+
+    function updatePondRipples(dt) {
+      for (const r of pond.ripples) r.life += dt;
+      pond.ripples = pond.ripples.filter((r) => r.life < r.max);
+    }
+
     function resetBoardView() {
       view.zoom = 1;
       view.rot = 0;
@@ -675,14 +909,18 @@
     }
 
     function drawRoundRect(x, y, w, h, r) {
+      drawRoundRectOn(ctx, x, y, w, h, r);
+    }
+
+    function drawRoundRectOn(targetCtx, x, y, w, h, r) {
       const rr = Math.min(r, w / 2, h / 2);
-      ctx.beginPath();
-      ctx.moveTo(x + rr, y);
-      ctx.arcTo(x + w, y, x + w, y + h, rr);
-      ctx.arcTo(x + w, y + h, x, y + h, rr);
-      ctx.arcTo(x, y + h, x, y, rr);
-      ctx.arcTo(x, y, x + w, y, rr);
-      ctx.closePath();
+      targetCtx.beginPath();
+      targetCtx.moveTo(x + rr, y);
+      targetCtx.arcTo(x + w, y, x + w, y + h, rr);
+      targetCtx.arcTo(x + w, y + h, x, y + h, rr);
+      targetCtx.arcTo(x, y + h, x, y, rr);
+      targetCtx.arcTo(x, y, x + w, y, rr);
+      targetCtx.closePath();
     }
 
     function drawBackground(W, H) {
@@ -768,10 +1006,17 @@
       }
     }
 
-    function drawTile(tile, rot, x, y, size, alpha = 1, owner = null) {
+    function drawTile(tile, rot, x, y, size, alpha = 1, owner = null, decorative = true) {
       const edges = rotatedEdges(tile, rot || 0);
       ctx.save();
       ctx.globalAlpha = alpha;
+      drawTileBase(tile, x, y, size, decorative);
+      drawTileFlowers(edges, x, y, size);
+      if (owner) drawTileOwner(owner, x, y, size);
+      ctx.restore();
+    }
+
+    function drawTileBase(tile, x, y, size, decorative = true) {
       ctx.fillStyle = "rgba(49,103,102,0.96)";
       drawRoundRect(x, y, size, size, size * 0.10);
       ctx.fill();
@@ -783,33 +1028,35 @@
       drawRoundRect(x + size * 0.055, y + size * 0.055, size * 0.89, size * 0.89, size * 0.08);
       ctx.fill();
 
-      ctx.strokeStyle = "rgba(189,245,232,0.20)";
-      ctx.lineWidth = Math.max(1, size * 0.018);
-      for (let i = 0; i < 3; i++) {
-        ctx.beginPath();
-        ctx.ellipse(x + size * (0.5 + i * 0.06 - 0.06), y + size * (0.48 + i * 0.035), size * (0.20 + i * 0.05), size * 0.07, -0.35, 0, Math.PI * 2);
-        ctx.stroke();
+      ctx.save();
+      drawPondClip(x, y, size);
+      ctx.clip();
+      drawStaticWaterSurface(tile.id, x, y, size);
+      if (decorative) {
+        drawPondScatter(tile.id, x, y, size);
+        drawMotif(tile.motif, x, y, size);
       }
+      ctx.restore();
+    }
 
-      drawPondScatter(tile.id, x, y, size);
-      drawMotif(tile.motif, x, y, size);
+    function drawTileFlowers(edges, x, y, size) {
       drawEdgeFlower(x + size / 2, y, edges[0], 0, size);
       drawEdgeFlower(x + size, y + size / 2, edges[1], Math.PI / 2, size);
       drawEdgeFlower(x + size / 2, y + size, edges[2], Math.PI, size);
       drawEdgeFlower(x, y + size / 2, edges[3], -Math.PI / 2, size);
-      if (owner) {
-        const p = profile(owner);
-        ctx.fillStyle = p.color || "#ffffff";
-        ctx.beginPath();
-        ctx.arc(x + size * 0.82, y + size * 0.18, size * 0.105, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = "#10202b";
-        ctx.font = `${Math.max(10, size * 0.13)}px serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(p.icon || "●", x + size * 0.82, y + size * 0.18);
-      }
-      ctx.restore();
+    }
+
+    function drawTileOwner(owner, x, y, size) {
+      const p = profile(owner);
+      ctx.fillStyle = p.color || "#ffffff";
+      ctx.beginPath();
+      ctx.arc(x + size * 0.82, y + size * 0.18, size * 0.105, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#10202b";
+      ctx.font = `${Math.max(10, size * 0.13)}px serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(p.icon || "●", x + size * 0.82, y + size * 0.18);
     }
 
     function drawTileBack(x, y, size, alpha = 1) {
@@ -867,19 +1114,67 @@
       return ((n >>> 0) % 10000) / 10000;
     }
 
+    function drawPondClip(x, y, size) {
+      drawRoundRect(x + size * 0.065, y + size * 0.065, size * 0.87, size * 0.87, size * 0.075);
+    }
+
+    function driftPoint(seed, i, x, y, size, speed = 0.010) {
+      const t = now() / 1000;
+      const margin = 0.115;
+      const span = 1 - margin * 2;
+      const bx = seeded(seed, i * 6);
+      const by = seeded(seed, i * 6 + 1);
+      const vx = (seeded(seed, i * 6 + 2) - 0.5) * speed;
+      const vy = (seeded(seed, i * 6 + 3) - 0.5) * speed;
+      const wobble = Math.sin(t * (0.10 + seeded(seed, i * 6 + 4) * 0.10) + seeded(seed, i * 6 + 5) * Math.PI * 2) * 0.018;
+      const px = margin + (((bx + vx * t + wobble) % 1) + 1) % 1 * span;
+      const py = margin + (((by + vy * t - wobble * 0.55) % 1) + 1) % 1 * span;
+      return { x: x + size * px, y: y + size * py, angle: Math.atan2(vy - wobble * 0.015, vx + 0.001) };
+    }
+
+    function drawStaticWaterSurface(id, x, y, size) {
+      return;
+    }
+
+    function drawRainRipple(x, y, r, phase) {
+      const pulse = 0.75 + ((now() / 2600 + phase) % 1) * 0.45;
+      ctx.save();
+      ctx.strokeStyle = "rgba(221,255,250,0.20)";
+      ctx.lineWidth = Math.max(0.5, r * 0.12);
+      for (let i = 0; i < 2; i++) {
+        ctx.globalAlpha = 0.40 - i * 0.15;
+        ctx.beginPath();
+        ctx.ellipse(x, y, r * pulse * (1 + i * 0.75), r * pulse * (0.45 + i * 0.30), 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawFishShadow(x, y, s, angle) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.fillStyle = "rgba(2,22,31,0.22)";
+      ctx.beginPath(); ctx.ellipse(0, 0, s * 2.1, s * 0.55, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-s * 1.75, 0); ctx.lineTo(-s * 2.45, -s * 0.36); ctx.lineTo(-s * 2.25, 0); ctx.lineTo(-s * 2.45, s * 0.36); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+
     function drawPondScatter(id, x, y, size) {
       const seed = tileSeed(id);
-      const count = size > 58 ? 5 : 4;
+      const count = size > 58 ? 3 : 2;
       for (let i = 0; i < count; i++) {
-        const px = x + size * (0.18 + seeded(seed, i * 4) * 0.64);
-        const py = y + size * (0.18 + seeded(seed, i * 4 + 1) * 0.64);
+        const speed = i % 5 === 0 || i % 5 === 4 ? 0.0012 : 0.008;
+        const p = driftPoint(seed, i, x, y, size, speed);
         const s = size * (0.045 + seeded(seed, i * 4 + 2) * 0.035);
-        const a = seeded(seed, i * 4 + 3) * Math.PI * 2;
-        if (i % 5 === 0) drawMiniLilyPad(px, py, s * 1.9, a);
-        else if (i % 5 === 1) drawMiniKoi(px, py, s * 1.25, a);
-        else if (i % 5 === 2) drawMiniTurtle(px, py, s * 1.25, a);
-        else if (i % 5 === 3) drawMiniDragonfly(px, py, s * 1.15, a);
-        else drawMiniLilyPad(px, py, s * 1.6, a);
+        const a = p.angle + seeded(seed, i * 4 + 3) * 0.38;
+        const roll = seeded(seed, i * 5 + 9);
+        if (roll < 0.62) drawMiniLilyPad(p.x, p.y, s * 1.8, a);
+        else if (roll < 0.78) drawRainRipple(p.x, p.y, s * 0.58, roll);
+        else if (roll < 0.86) drawMiniButterfly(p.x, p.y, s * 0.56, a);
+        else if (roll < 0.92) drawMiniDragonfly(p.x, p.y, s * 0.72, a);
+        else if (roll < 0.97) drawMiniKoi(p.x, p.y, s * 1.12, a);
+        else drawMiniTurtle(p.x, p.y, s * 1.10, a);
       }
     }
 
@@ -887,14 +1182,15 @@
       ctx.save();
       ctx.translate(x + size * 0.5, y + size * 0.52);
       if (motif === "koi") {
-        drawMiniKoi(0, 0, size * 0.15, -0.55);
+        drawMiniKoi(0, 0, size * 0.15, -0.55 + Math.sin(now() / 4200) * 0.10);
       } else if (motif === "turtle") {
-        drawMiniTurtle(0, 0, size * 0.17, 0.2);
+        drawMiniTurtle(0, 0, size * 0.17, 0.2 + Math.sin(now() / 5200) * 0.08);
       } else if (motif === "dragonfly") {
-        drawMiniDragonfly(0, 0, size * 0.17, -0.18);
+        drawMiniDragonfly(0, 0, size * 0.12, -0.18);
       } else {
         drawMiniLilyPad(-size * 0.06, size * 0.02, size * 0.18, -0.55);
         drawMiniLilyPad(size * 0.12, -size * 0.08, size * 0.12, 0.85);
+        drawMiniButterfly(size * 0.03, -size * 0.13, size * 0.045, 0.35);
       }
       ctx.restore();
     }
@@ -922,13 +1218,49 @@
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(angle);
-      ctx.fillStyle = "rgba(255,225,186,0.88)";
-      ctx.beginPath(); ctx.ellipse(0, 0, s * 1.35, s * 0.58, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = "rgba(236,92,57,0.86)";
-      ctx.beginPath(); ctx.ellipse(-s * 0.24, -s * 0.10, s * 0.45, s * 0.24, -0.5, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(-s * 1.22, 0); ctx.lineTo(-s * 1.88, -s * 0.44); ctx.lineTo(-s * 1.72, 0); ctx.lineTo(-s * 1.88, s * 0.44); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = "rgba(24,34,33,0.72)";
-      ctx.beginPath(); ctx.arc(s * 0.86, -s * 0.14, Math.max(1, s * 0.12), 0, Math.PI * 2); ctx.fill();
+      drawKoiWake(-s * 1.08, 0, s);
+      ctx.fillStyle = "rgba(1,22,32,0.20)";
+      ctx.beginPath(); ctx.ellipse(s * 0.16, s * 0.12, s * 1.75, s * 0.62, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha *= 0.86;
+      ctx.fillStyle = "rgba(255,238,204,0.74)";
+      ctx.beginPath(); ctx.ellipse(0, 0, s * 1.30, s * 0.48, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(236,82,50,0.70)";
+      ctx.beginPath(); ctx.ellipse(-s * 0.28, -s * 0.10, s * 0.42, s * 0.18, -0.35, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(s * 0.30, s * 0.11, s * 0.34, s * 0.16, 0.35, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(248,154,83,0.58)";
+      ctx.beginPath(); ctx.moveTo(-s * 1.10, 0); ctx.lineTo(-s * 1.72, -s * 0.40); ctx.lineTo(-s * 1.50, 0); ctx.lineTo(-s * 1.72, s * 0.40); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "rgba(255,238,204,0.42)";
+      ctx.beginPath(); ctx.ellipse(-s * 0.28, -s * 0.52, s * 0.52, s * 0.12, -0.45, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(-s * 0.28, s * 0.52, s * 0.52, s * 0.12, 0.45, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "rgba(221,255,250,0.22)";
+      ctx.lineWidth = Math.max(0.5, s * 0.07);
+      ctx.beginPath(); ctx.moveTo(s * 0.95, 0); ctx.quadraticCurveTo(s * 0.10, -s * 0.16, -s * 0.95, 0); ctx.stroke();
+      ctx.fillStyle = "rgba(10,24,25,0.64)";
+      ctx.beginPath(); ctx.arc(s * 0.78, -s * 0.11, Math.max(0.7, s * 0.08), 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(s * 0.78, s * 0.11, Math.max(0.7, s * 0.08), 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(110,220,230,0.15)";
+      ctx.beginPath(); ctx.ellipse(0, 0, s * 1.70, s * 0.68, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+
+    function drawKoiWake(x, y, s) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.strokeStyle = "rgba(221,255,250,0.24)";
+      ctx.lineWidth = Math.max(0.45, s * 0.050);
+      for (let i = 0; i < 3; i++) {
+        const spread = s * (0.26 + i * 0.17);
+        const length = s * (0.72 + i * 0.46);
+        ctx.globalAlpha = 0.34 - i * 0.075;
+        ctx.beginPath();
+        ctx.moveTo(-s * 0.06, 0);
+        ctx.quadraticCurveTo(-length * 0.48, -spread * 0.34, -length, -spread);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(-s * 0.06, 0);
+        ctx.quadraticCurveTo(-length * 0.48, spread * 0.34, -length, spread);
+        ctx.stroke();
+      }
       ctx.restore();
     }
 
@@ -936,17 +1268,28 @@
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(angle);
-      ctx.fillStyle = "rgba(83,151,96,0.82)";
-      ctx.beginPath(); ctx.ellipse(0, 0, s * 1.12, s * 0.82, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = "rgba(126,190,115,0.80)";
-      ctx.beginPath(); ctx.arc(s * 1.10, 0, s * 0.34, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = "rgba(47,112,78,0.78)";
-      for (const p of [[-0.62, -0.65], [-0.62, 0.65], [0.48, -0.65], [0.48, 0.65]]) {
-        ctx.beginPath(); ctx.ellipse(s * p[0], s * p[1], s * 0.34, s * 0.20, p[1] > 0 ? 0.65 : -0.65, 0, Math.PI * 2); ctx.fill();
+      drawWake(-s * 1.05, 0, s * 0.85, Math.PI);
+      ctx.fillStyle = "rgba(8,29,31,0.18)";
+      ctx.beginPath(); ctx.ellipse(s * 0.10, s * 0.12, s * 1.35, s * 0.92, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(49,111,78,0.72)";
+      for (const p of [[-0.62, -0.66, -0.60], [-0.62, 0.66, 0.60], [0.48, -0.70, 0.75], [0.48, 0.70, -0.75]]) {
+        ctx.beginPath(); ctx.ellipse(s * p[0], s * p[1], s * 0.42, s * 0.17, p[2], 0, Math.PI * 2); ctx.fill();
       }
-      ctx.strokeStyle = "rgba(217,249,186,0.38)";
-      ctx.lineWidth = Math.max(0.6, s * 0.10);
-      ctx.beginPath(); ctx.moveTo(-s * 0.58, 0); ctx.lineTo(s * 0.58, 0); ctx.moveTo(0, -s * 0.58); ctx.lineTo(0, s * 0.58); ctx.stroke();
+      ctx.fillStyle = "rgba(115,178,104,0.78)";
+      ctx.beginPath(); ctx.arc(s * 1.06, 0, s * 0.30, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(69,139,83,0.88)";
+      ctx.beginPath(); ctx.ellipse(0, 0, s * 1.08, s * 0.78, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(94,164,95,0.86)";
+      ctx.beginPath(); ctx.ellipse(s * 0.10, 0, s * 0.78, s * 0.54, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "rgba(222,249,186,0.36)";
+      ctx.lineWidth = Math.max(0.5, s * 0.075);
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.58, 0); ctx.lineTo(s * 0.62, 0);
+      ctx.moveTo(-s * 0.12, -s * 0.50); ctx.lineTo(-s * 0.12, s * 0.50);
+      ctx.moveTo(s * 0.35, -s * 0.38); ctx.lineTo(s * 0.35, s * 0.38);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(13,48,42,0.60)";
+      ctx.beginPath(); ctx.arc(s * 1.16, -s * 0.08, Math.max(0.5, s * 0.045), 0, Math.PI * 2); ctx.fill();
       ctx.restore();
     }
 
@@ -954,15 +1297,52 @@
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(angle);
-      ctx.fillStyle = "rgba(198,244,255,0.42)";
-      for (const p of [[-0.34, -0.48, -0.48], [0.34, -0.48, 0.48], [-0.28, 0.45, 0.45], [0.28, 0.45, -0.45]]) {
-        ctx.beginPath(); ctx.ellipse(s * p[0], s * p[1], s * 0.48, s * 0.20, p[2], 0, Math.PI * 2); ctx.fill();
+      const flap = Math.sin(now() / 260 + x * 0.01 + y * 0.01) * 0.18;
+      const rearWingHeadOffset = Math.min(0.75, 10 / Math.max(1, s));
+      ctx.fillStyle = "rgba(213,250,255,0.34)";
+      for (const p of [[-0.34, -0.16, -0.58 - flap], [0.34, -0.16, 0.58 + flap], [-0.30, -0.13 - rearWingHeadOffset, 0.46 + flap], [0.30, -0.13 - rearWingHeadOffset, -0.46 - flap]]) {
+        ctx.beginPath(); ctx.ellipse(s * p[0], s * p[1], s * 0.42, s * 0.15, p[2], 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = "rgba(230,255,255,0.20)";
+        ctx.lineWidth = Math.max(0.3, s * 0.035);
+        ctx.stroke();
       }
-      ctx.strokeStyle = "rgba(150,235,225,0.82)";
-      ctx.lineWidth = Math.max(0.8, s * 0.13);
-      ctx.beginPath(); ctx.moveTo(0, -s * 0.82); ctx.lineTo(0, s * 0.88); ctx.stroke();
-      ctx.fillStyle = "rgba(42,92,90,0.84)";
-      ctx.beginPath(); ctx.arc(0, -s * 0.95, s * 0.20, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "rgba(64,157,143,0.82)";
+      ctx.lineWidth = Math.max(0.5, s * 0.10);
+      ctx.beginPath(); ctx.moveTo(0, -s * 0.72); ctx.quadraticCurveTo(s * 0.05, 0, 0, s * 0.92); ctx.stroke();
+      ctx.fillStyle = "rgba(29,86,80,0.88)";
+      ctx.beginPath(); ctx.arc(0, -s * 0.88, s * 0.16, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(179,255,246,0.60)";
+      ctx.beginPath(); ctx.arc(-s * 0.07, -s * 0.92, s * 0.045, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(s * 0.07, -s * 0.92, s * 0.045, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+
+    function drawMiniButterfly(x, y, s, angle) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      const flap = Math.sin(now() / 340 + x * 0.02) * 0.18;
+      ctx.fillStyle = "rgba(255,218,149,0.58)";
+      ctx.beginPath(); ctx.ellipse(-s * 0.38, -s * 0.02, s * 0.46, s * 0.28, -0.72 - flap, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(s * 0.38, -s * 0.02, s * 0.46, s * 0.28, 0.72 + flap, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "rgba(64,57,47,0.68)";
+      ctx.lineWidth = Math.max(0.4, s * 0.06);
+      ctx.beginPath(); ctx.moveTo(0, -s * 0.32); ctx.lineTo(0, s * 0.42); ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawWake(x, y, s, angle) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.strokeStyle = "rgba(221,255,250,0.20)";
+      ctx.lineWidth = Math.max(0.4, s * 0.045);
+      for (let i = 0; i < 3; i++) {
+        ctx.globalAlpha = 0.32 - i * 0.07;
+        ctx.beginPath();
+        ctx.ellipse(-s * (0.18 + i * 0.35), 0, s * (0.38 + i * 0.28), s * (0.12 + i * 0.03), 0, Math.PI * 0.14, Math.PI * 1.86);
+        ctx.stroke();
+      }
       ctx.restore();
     }
 
@@ -976,10 +1356,10 @@
       ctx.rect(-radius, 0, radius * 2, radius * 1.08);
       ctx.clip();
       drawFlowerPetals(def, size);
-      ctx.strokeStyle = "rgba(255,255,255,0.34)";
+      ctx.strokeStyle = "rgba(255,255,255,0.085)";
       ctx.lineWidth = Math.max(1, size * 0.012);
       ctx.beginPath();
-      ctx.arc(0, 0, radius * 0.83, 0, Math.PI);
+      ctx.arc(0, 0, radius * 0.7885, 0, Math.PI);
       ctx.stroke();
       ctx.fillStyle = def.center;
       ctx.beginPath();
@@ -1106,7 +1486,15 @@
         const { x, y } = parseKey(k);
         const p = gridToScreen(x, y);
         ui.cells.set(k, { x: p.x, y: p.y, w: ui.view.scale, h: ui.view.scale });
-        drawBoardTile(cell.tile, cell.rot, p.x, p.y, ui.view.scale - 2, 1, cell.owner !== "system" ? cell.owner : null);
+        drawBoardTileBase(cell.tile, p.x, p.y, ui.view.scale - 2, 1);
+      }
+
+      drawPondLife();
+
+      for (const [k, cell] of entries) {
+        const { x, y } = parseKey(k);
+        const p = gridToScreen(x, y);
+        drawBoardTileTop(cell.tile, cell.rot, p.x, p.y, ui.view.scale - 2, 1, cell.owner !== "system" ? cell.owner : null);
       }
 
       for (const k of legal) {
@@ -1145,11 +1533,109 @@
       ctx.restore();
     }
 
+    function drawPondLife() {
+      if (!pond.entities.length && !pond.ripples.length) return;
+      for (const k of Object.keys(state.board)) {
+        const cell = parseKey(k);
+        ctx.save();
+        beginPlacedCardClip(cell.x, cell.y);
+        ctx.clip();
+        for (const r of pond.ripples) if (rippleOverlapsPlacedCell(r, cell.x, cell.y)) drawWorldPondRipple(r);
+        for (const e of pond.entities.filter((entity) => entity.type === "shadow")) if (entityOverlapsPlacedCell(e, cell.x, cell.y)) drawWorldPondEntity(e);
+        for (const e of pond.entities.filter((entity) => entity.type !== "shadow")) if (entityOverlapsPlacedCell(e, cell.x, cell.y)) drawWorldPondEntity(e);
+        ctx.restore();
+      }
+    }
+
+    function entityOverlapsPlacedCell(e, cellX, cellY) {
+      return circleOverlapsPlacedCell(e.x, e.y, pondEntityDrawRadius(e), cellX, cellY);
+    }
+
+    function rippleOverlapsPlacedCell(r, cellX, cellY) {
+      const t = r.life / r.max;
+      return circleOverlapsPlacedCell(r.x, r.y, r.r * (1 + t * 2.2), cellX, cellY);
+    }
+
+    function circleOverlapsPlacedCell(x, y, radius, cellX, cellY) {
+      const minX = cellX - 0.5, maxX = cellX + 0.5;
+      const minY = cellY - 0.5, maxY = cellY + 0.5;
+      const nearestX = clamp(x, minX, maxX);
+      const nearestY = clamp(y, minY, maxY);
+      return Math.hypot(x - nearestX, y - nearestY) <= radius;
+    }
+
+    function pondEntityDrawRadius(e) {
+      if (e.type === "koi") return e.radius * 1.8;
+      if (e.type === "turtle") return e.radius * 1.5;
+      if (e.type === "shadow") return e.radius * 2.5;
+      if (e.type === "bug") return e.radius * 1.4;
+      return e.radius * 1.2;
+    }
+
+    function beginPlacedCardClip(x, y) {
+      const c = gridToScreen(x, y);
+      ctx.beginPath();
+      ctx.save();
+      ctx.translate(c.x, c.y);
+      ctx.rotate(ui.view.rot);
+      drawRoundRect(-ui.view.scale / 2 + 1, -ui.view.scale / 2 + 1, ui.view.scale - 2, ui.view.scale - 2, ui.view.scale * 0.10);
+      ctx.restore();
+    }
+
+    function drawWorldPondRipple(r) {
+      const p = gridToScreen(r.x, r.y);
+      const scale = ui.view.scale;
+      const t = r.life / r.max;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, 1 - t) * 0.55;
+      ctx.strokeStyle = "rgba(221,255,250,0.46)";
+      ctx.lineWidth = Math.max(0.5, scale * 0.006);
+      for (let i = 0; i < 2; i++) {
+        const ringT = Math.min(1, t + i * 0.18);
+        ctx.globalAlpha = Math.max(0, 1 - ringT) * (0.42 - i * 0.14);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, scale * r.r * (0.35 + ringT * 2.9), 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawWorldPondEntity(e) {
+      const p = gridToScreen(e.x, e.y);
+      const size = ui.view.scale;
+      const angle = Math.atan2(e.vy, e.vx) + ui.view.rot;
+      if (e.type === "pad") drawMiniLilyPad(p.x, p.y, size * e.radius, (e.angle || 0) + ui.view.rot);
+      else if (e.type === "koi") drawMiniKoi(p.x, p.y, size * e.radius * 0.82, angle);
+      else if (e.type === "turtle") drawMiniTurtle(p.x, p.y, size * e.radius * 0.92, angle);
+      else if (e.type === "shadow") drawFishShadow(p.x, p.y, size * e.radius, angle);
+      else if (e.bugKind === "dragonfly") drawMiniDragonfly(p.x, p.y, size * e.radius, (e.landedOn ? e.angle + ui.view.rot : angle + Math.PI / 2), !e.landedOn);
+      else drawMiniButterfly(p.x, p.y, size * e.radius, angle);
+    }
+
     function drawBoardTile(tile, rot, cx, cy, size, alpha, owner) {
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate(ui.view.rot);
-      drawTile(tile, rot, -size / 2, -size / 2, size, alpha, owner);
+      drawTile(tile, rot, -size / 2, -size / 2, size, alpha, owner, false);
+      ctx.restore();
+    }
+
+    function drawBoardTileBase(tile, cx, cy, size, alpha) {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(cx, cy);
+      ctx.rotate(ui.view.rot);
+      drawTileBase(tile, -size / 2, -size / 2, size, false);
+      ctx.restore();
+    }
+
+    function drawBoardTileTop(tile, rot, cx, cy, size, alpha, owner) {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(cx, cy);
+      ctx.rotate(ui.view.rot);
+      drawTileFlowers(rotatedEdges(tile, rot || 0), -size / 2, -size / 2, size);
+      if (owner) drawTileOwner(owner, -size / 2, -size / 2, size);
       ctx.restore();
     }
 
@@ -1466,6 +1952,7 @@
       }
       const effectsStart = now();
       updateEffects(frameMs || 16, canvas.clientWidth, canvas.clientHeight);
+      updatePondLife(frameMs || 16);
       perf.effectsMs += now() - effectsStart;
       const drawStart = now();
       draw();
