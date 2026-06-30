@@ -6,10 +6,15 @@
 
   const SNAPSHOT_HZ = 20;
   const PHYSICS_DT = 1 / 60;
-  const GRAVITY = 1.55;
+  const GRAVITY = 1.25;
   const FLOOR_Y = 0.90;
   const WALL_PAD = 0.055;
   const BLOCK_LIMIT = 90;
+  const SOLVER_PASSES = 10;
+  const LINEAR_DAMPING = 0.992;
+  const ANGULAR_DAMPING = 0.985;
+  const RESTITUTION = 0.03;
+  const FRICTION = 0.82;
   const SHAPES = [
     { key: "brick", name: "Brick", w: 0.145, h: 0.050, mass: 1.0, emoji: "▭", color: "#e46b5d" },
     { key: "wide", name: "Wide", w: 0.210, h: 0.040, mass: 1.2, emoji: "▬", color: "#f2a65a" },
@@ -243,7 +248,7 @@
       const raCn = cross(rax, ray, n.x, n.y);
       const rbCn = cross(rbx, rby, n.x, n.y);
       const inv = totalInv + raCn * raCn * a.invI + rbCn * rbCn * b.invI;
-      const j = -(1 + 0.18) * velN / Math.max(0.0001, inv);
+      const j = -(1 + RESTITUTION) * velN / Math.max(0.0001, inv);
       const ix = n.x * j, iy = n.y * j;
       applyImpulse(a, -ix, -iy, p.x, p.y);
       applyImpulse(b, ix, iy, p.x, p.y);
@@ -251,7 +256,7 @@
       const tx = -n.y, ty = n.x;
       const velT = rvx * tx + rvy * ty;
       const jt = -velT / Math.max(0.0001, inv);
-      const mu = 0.58;
+      const mu = FRICTION;
       const fj = clamp(jt, -j * mu, j * mu);
       applyImpulse(a, -tx * fj, -ty * fj, p.x, p.y);
       applyImpulse(b, tx * fj, ty * fj, p.x, p.y);
@@ -262,17 +267,19 @@
       for (const b of state.blocks) {
         if (b.fixed) continue;
         b.vy += GRAVITY * dt;
-        b.vx *= 0.999;
-        b.vy *= 0.999;
-        b.av *= 0.996;
+        b.vx *= LINEAR_DAMPING;
+        b.vy *= LINEAR_DAMPING;
+        b.av *= ANGULAR_DAMPING;
         b.x += b.vx * dt;
         b.y += b.vy * dt;
         b.angle += b.av * dt;
       }
-      for (let pass = 0; pass < 5; pass++) {
+      for (let pass = 0; pass < SOLVER_PASSES; pass++) {
+        for (const b of state.blocks) solveGroundContact(b);
         for (let i = 0; i < state.blocks.length; i++) {
           for (let j = i + 1; j < state.blocks.length; j++) {
             const a = state.blocks[i], b = state.blocks[j];
+            if (a.fixed || b.fixed) continue;
             if (Math.abs(a.x - b.x) > (a.w + b.w) * 0.9 || Math.abs(a.y - b.y) > (a.h + b.h) * 1.2) continue;
             const hit = sat(a, b);
             if (hit) solveCollision(a, b, hit);
@@ -290,6 +297,36 @@
         }
       }
       state.blocks = state.blocks.filter((b) => !b.dead).slice(-BLOCK_LIMIT);
+    }
+
+    function solveGroundContact(b) {
+      if (b.fixed) return;
+      const below = corners(b).filter((p) => p.y > FLOOR_Y);
+      if (!below.length) return;
+      const n = { x: 0, y: -1 };
+      for (const p of below) {
+        const depth = p.y - FLOOR_Y;
+        b.y -= depth / below.length * 0.92;
+        const rx = p.x - b.x;
+        const ry = p.y - b.y;
+        const vx = b.vx - b.av * ry;
+        const vy = b.vy + b.av * rx;
+        const velN = vx * n.x + vy * n.y;
+        if (velN < 0) {
+          const rCn = cross(rx, ry, n.x, n.y);
+          const inv = b.invMass + rCn * rCn * b.invI;
+          const j = -(1 + RESTITUTION) * velN / Math.max(0.0001, inv);
+          applyImpulse(b, n.x * j, n.y * j, p.x, FLOOR_Y);
+          const tx = 1, ty = 0;
+          const vt = vx * tx + vy * ty;
+          const jt = -vt / Math.max(0.0001, inv);
+          const fj = clamp(jt, -j * FRICTION, j * FRICTION);
+          applyImpulse(b, tx * fj, ty * fj, p.x, FLOOR_Y);
+        }
+      }
+      if (Math.abs(b.vy) < 0.006) b.vy = 0;
+      if (Math.abs(b.vx) < 0.004) b.vx = 0;
+      if (Math.abs(b.av) < 0.012) b.av = 0;
     }
 
     function updateSettledScores() {
@@ -324,10 +361,11 @@
     function placeBlock(id, input) {
       const shape = shapeByKey(input.shape);
       const x = clamp(Number(input.x) || 0.5, WALL_PAD + shape.w / 2, 1 - WALL_PAD - shape.w / 2);
-      const y = clamp(Number(input.y) || 0.25, -0.55, FLOOR_Y - shape.h);
-      const angle = clamp(Number(input.angle) || 0, -Math.PI, Math.PI);
+      const y = clamp((Number(input.y) || 0.25) - shape.h * 0.25, -0.55, FLOOR_Y - shape.h / 2 - 0.01);
+      let angle = clamp(Number(input.angle) || 0, -Math.PI, Math.PI);
+      if (Math.abs(angle) < 0.025) angle = 0;
       const b = makeBlock("b" + state.nextId++, id, x, y, angle, { ...shape, color: profile(id).color || shape.color });
-      b.vy = 0.02;
+      b.vy = 0;
       state.blocks.push(b);
       emitEvent("place", x, y, 0.9, b.color);
     }
