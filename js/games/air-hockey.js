@@ -568,7 +568,7 @@
         const s = tableToScreen(p);
         const alpha = Math.max(0, p.life / p.maxLife);
         const r = PUCK_R * Math.min(rects.table.w, rects.table.h) * (0.65 + alpha * 0.35);
-        ctx.fillStyle = `rgba(210,232,255,${alpha * 0.24})`;
+        ctx.fillStyle = `rgba(210,232,255,${alpha * 0.10})`;
         ctx.beginPath();
         ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
         ctx.fill();
