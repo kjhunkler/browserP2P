@@ -5,7 +5,7 @@
   "use strict";
 
   const SNAPSHOT_HZ = 15;
-  const MAX_FISH = 62;
+  const MAX_FISH = 48;
   const MAX_SNAGS = 9;
   const GRAVITY = 0.54;
   const CAST_SPEED = 0.62;
@@ -15,12 +15,12 @@
   const MIN_FISH_Y = 0.48;
   const MAX_FISH_Y = 0.91;
   const FISH_TYPES = [
-    { kind: "minnow", points: 2, w: 0.072, h: 0.030, colors: ["#9be7ff", "#c8f6ff", "#7ed6ff"], speed: 0.050 },
-    { kind: "snapper", points: 7, w: 0.100, h: 0.046, colors: ["#ff7b7b", "#ffd166", "#f77f00"], speed: 0.042 },
-    { kind: "tuna", points: 14, w: 0.140, h: 0.055, colors: ["#5386e4", "#89b4ff", "#2b59c3"], speed: 0.061 },
-    { kind: "jelly", points: 10, w: 0.086, h: 0.072, colors: ["#d783ff", "#ff9af5", "#a855f7"], speed: 0.030 },
-    { kind: "eel", points: 18, w: 0.165, h: 0.034, colors: ["#70e000", "#38b000", "#9ef01a"], speed: 0.072 },
-    { kind: "gold", points: 30, w: 0.105, h: 0.048, colors: ["#ffd700", "#fff3a3", "#ff9f1c"], speed: 0.080 },
+    { kind: "minnow", points: 2, w: 0.042, h: 0.020, colors: ["#9be7ff", "#c8f6ff", "#7ed6ff"], speed: 0.018 },
+    { kind: "snapper", points: 7, w: 0.058, h: 0.030, colors: ["#ff7b7b", "#ffd166", "#f77f00"], speed: 0.016 },
+    { kind: "tuna", points: 14, w: 0.080, h: 0.034, colors: ["#5386e4", "#89b4ff", "#2b59c3"], speed: 0.022 },
+    { kind: "jelly", points: 10, w: 0.052, h: 0.048, colors: ["#d783ff", "#ff9af5", "#a855f7"], speed: 0.011 },
+    { kind: "eel", points: 18, w: 0.098, h: 0.022, colors: ["#70e000", "#38b000", "#9ef01a"], speed: 0.026 },
+    { kind: "gold", points: 30, w: 0.060, h: 0.030, colors: ["#ffd700", "#fff3a3", "#ff9f1c"], speed: 0.030 },
   ];
   const SNAG_TYPES = ["boot", "crate", "kelp", "anchor", "can"];
 
@@ -142,12 +142,12 @@
         id: "f" + Math.random().toString(36).slice(2, 9),
         kind: type.kind,
         points: type.points + Math.floor(rand(0, type.points * 0.35)),
-        x: rand(-0.04, 1.04),
+        x: dir > 0 ? rand(-0.18, -0.04) : rand(1.04, 1.18),
         y: rand(MIN_FISH_Y, MAX_FISH_Y),
-        vx: dir * type.speed * rand(0.75, 1.35),
-        vy: rand(-0.010, 0.010),
-        w: type.w * rand(0.95, 1.45),
-        h: type.h * rand(0.95, 1.50),
+        vx: dir * type.speed * rand(0.70, 1.10),
+        vy: rand(-0.004, 0.004),
+        w: type.w * rand(0.85, 1.15),
+        h: type.h * rand(0.85, 1.15),
         color,
         accent: choice(type.colors),
         phase: rand(0, Math.PI * 2),
@@ -400,7 +400,7 @@
         f.phase += dt * 4;
         f.x += f.vx * dt;
         f.y += Math.sin(f.phase) * f.speed * 0.20 * dt + f.vy * dt;
-        if (f.x < -0.18 || f.x > 1.18 || f.y < MIN_FISH_Y - 0.04 || f.y > 0.98) Object.assign(f, spawnFish());
+        if (f.x < -0.24 || f.x > 1.24 || f.y < MIN_FISH_Y - 0.04 || f.y > 0.98) Object.assign(f, spawnFish());
         else f.y = clamp(f.y, MIN_FISH_Y, MAX_FISH_Y);
       }
       for (const s of state.snags) {
@@ -524,8 +524,9 @@
       if (f.y < WATER_SURFACE_Y + f.h * 0.9) return;
       const x = sx(f.x);
       const y = sy(f.y);
-      const w = f.w * canvas.clientWidth;
-      const h = f.h * canvas.clientHeight;
+      const scale = Math.min(canvas.clientWidth, canvas.clientHeight);
+      const w = f.w * scale;
+      const h = f.h * scale;
       const dir = f.vx >= 0 ? 1 : -1;
       const bodyX = x - w * 0.34;
       const bodyY = y - h * 0.36;
