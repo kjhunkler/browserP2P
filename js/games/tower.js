@@ -15,6 +15,7 @@
   const ANGULAR_DAMPING = 0.985;
   const RESTITUTION = 0.03;
   const FRICTION = 0.82;
+  const RESTING_SPEED = 0.030;
   const SHAPES = [
     { key: "brick", name: "Brick", w: 0.145, h: 0.050, mass: 1.0, emoji: "▭", color: "#e46b5d" },
     { key: "wide", name: "Wide", w: 0.210, h: 0.040, mass: 1.2, emoji: "▬", color: "#f2a65a" },
@@ -207,17 +208,30 @@
       }
       const dx = b.x - a.x, dy = b.y - a.y;
       if (dx * best.x + dy * best.y < 0) best = { x: -best.x, y: -best.y };
-      const contacts = ac.concat(bc).filter((p) => pointInBlock(p, a) || pointInBlock(p, b));
-      const contact = contacts.length ? contacts.reduce((m, p) => ({ x: m.x + p.x / contacts.length, y: m.y + p.y / contacts.length }), { x: 0, y: 0 }) : { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-      return { normal: best, depth: overlap, contact };
+      return { normal: best, depth: overlap, contacts: contactPoints(a, b, ac, bc) };
     }
 
-    function pointInBlock(p, b) {
+    function contactPoints(a, b, ac = corners(a), bc = corners(b)) {
+      const pts = [];
+      for (const p of ac) if (pointInBlock(p, b, 0.003)) pts.push(p);
+      for (const p of bc) if (pointInBlock(p, a, 0.003)) pts.push(p);
+      if (!pts.length) return [{ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }];
+      const unique = [];
+      for (const p of pts) {
+        if (!unique.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < 0.006)) unique.push(p);
+      }
+      if (unique.length <= 2) return unique;
+      const axis = Math.abs(a.angle - b.angle) < 0.35 ? axesFor(a)[0] : { x: 1, y: 0 };
+      unique.sort((p, q) => (p.x * axis.x + p.y * axis.y) - (q.x * axis.x + q.y * axis.y));
+      return [unique[0], unique[unique.length - 1]];
+    }
+
+    function pointInBlock(p, b, pad = 0.001) {
       const c = Math.cos(-b.angle), s = Math.sin(-b.angle);
       const dx = p.x - b.x, dy = p.y - b.y;
       const lx = dx * c - dy * s;
       const ly = dx * s + dy * c;
-      return Math.abs(lx) <= b.w / 2 + 0.001 && Math.abs(ly) <= b.h / 2 + 0.001;
+      return Math.abs(lx) <= b.w / 2 + pad && Math.abs(ly) <= b.h / 2 + pad;
     }
 
     function cross(ax, ay, bx, by) { return ax * by - ay * bx; }
@@ -231,13 +245,23 @@
 
     function solveCollision(a, b, hit) {
       const n = hit.normal;
-      const p = hit.contact;
       const totalInv = a.invMass + b.invMass;
       if (totalInv <= 0) return;
       const correction = Math.max(0, hit.depth - 0.001) / totalInv * 0.72;
       if (a.invMass) { a.x -= n.x * correction * a.invMass; a.y -= n.y * correction * a.invMass; }
       if (b.invMass) { b.x += n.x * correction * b.invMass; b.y += n.y * correction * b.invMass; }
 
+      const contacts = hit.contacts?.length ? hit.contacts : [{ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }];
+      let maxJ = 0;
+      for (const p of contacts) solveContactImpulse(a, b, n, p, contacts.length, (j) => { maxJ = Math.max(maxJ, Math.abs(j)); });
+      stabilizeRestingPair(a, b, n, contacts.length);
+      if (maxJ > 0.018 && Math.random() < 0.04) {
+        const p = contacts[0];
+        emitEvent("hit", p.x, p.y, Math.min(1.2, maxJ * 5), "#d8e6ff");
+      }
+    }
+
+    function solveContactImpulse(a, b, n, p, contactCount, onImpulse) {
       const rax = p.x - a.x, ray = p.y - a.y;
       const rbx = p.x - b.x, rby = p.y - b.y;
       const vax = a.vx - a.av * ray, vay = a.vy + a.av * rax;
@@ -247,8 +271,9 @@
       if (velN > 0) return;
       const raCn = cross(rax, ray, n.x, n.y);
       const rbCn = cross(rbx, rby, n.x, n.y);
+      const totalInv = a.invMass + b.invMass;
       const inv = totalInv + raCn * raCn * a.invI + rbCn * rbCn * b.invI;
-      const j = -(1 + RESTITUTION) * velN / Math.max(0.0001, inv);
+      const j = (-(1 + RESTITUTION) * velN / Math.max(0.0001, inv)) / contactCount;
       const ix = n.x * j, iy = n.y * j;
       applyImpulse(a, -ix, -iy, p.x, p.y);
       applyImpulse(b, ix, iy, p.x, p.y);
@@ -257,10 +282,23 @@
       const velT = rvx * tx + rvy * ty;
       const jt = -velT / Math.max(0.0001, inv);
       const mu = FRICTION;
-      const fj = clamp(jt, -j * mu, j * mu);
+      const fj = clamp(jt / contactCount, -Math.abs(j) * mu, Math.abs(j) * mu);
       applyImpulse(a, -tx * fj, -ty * fj, p.x, p.y);
       applyImpulse(b, tx * fj, ty * fj, p.x, p.y);
-      if (Math.abs(j) > 0.018 && Math.random() < 0.08) emitEvent("hit", p.x, p.y, Math.min(1.2, Math.abs(j) * 5), "#d8e6ff");
+      onImpulse?.(j);
+    }
+
+    function stabilizeRestingPair(a, b, n, contactCount) {
+      if (contactCount < 2) return;
+      const top = n.y < -0.45 ? b : (n.y > 0.45 ? a : null);
+      const bottom = top === b ? a : (top === a ? b : null);
+      if (!top || !bottom || top.fixed) return;
+      const relV = Math.hypot(top.vx - bottom.vx, top.vy - bottom.vy);
+      if (relV > RESTING_SPEED || Math.abs(top.av) > 0.18 || Math.abs(bottom.av) > 0.18) return;
+      top.vx = bottom.fixed ? top.vx * 0.78 : bottom.vx + (top.vx - bottom.vx) * 0.45;
+      top.vy = Math.min(top.vy, bottom.vy + 0.002);
+      top.av *= 0.35;
+      if (!bottom.fixed) bottom.av *= 0.65;
     }
 
     function integrate(dt) {
