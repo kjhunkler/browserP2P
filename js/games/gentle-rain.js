@@ -7,14 +7,14 @@
   const SNAPSHOT_HZ = 12;
   const TILE_COUNT = 28;
   const BLOSSOMS = [
-    { key: "lotus", name: "Lotus", color: "#f4a6cf", text: "Lotus" },
-    { key: "iris", name: "Iris", color: "#a993ff", text: "Iris" },
-    { key: "lily", name: "Lily", color: "#f7f0bd", text: "Lily" },
-    { key: "mint", name: "Mint", color: "#8ce8bc", text: "Mint" },
-    { key: "sky", name: "Sky", color: "#8ed8ff", text: "Sky" },
-    { key: "coral", name: "Coral", color: "#ffb08a", text: "Coral" },
-    { key: "violet", name: "Violet", color: "#d9a6ff", text: "Violet" },
-    { key: "jade", name: "Jade", color: "#94d78d", text: "Jade" },
+    { key: "lotus", name: "Rose Lotus", color: "#f4a6cf", center: "#ffe5a8", petals: 7, shape: "round" },
+    { key: "iris", name: "Purple Iris", color: "#a993ff", center: "#fff0a8", petals: 5, shape: "point" },
+    { key: "lily", name: "Cream Lily", color: "#f7f0bd", center: "#f2b84b", petals: 6, shape: "long" },
+    { key: "mint", name: "Mint Clover", color: "#8ce8bc", center: "#fff7c7", petals: 4, shape: "heart" },
+    { key: "sky", name: "Blue Anemone", color: "#8ed8ff", center: "#263a76", petals: 8, shape: "round" },
+    { key: "coral", name: "Coral Poppy", color: "#ffb08a", center: "#5d3328", petals: 5, shape: "wide" },
+    { key: "violet", name: "Lilac Aster", color: "#d9a6ff", center: "#ffe28f", petals: 9, shape: "point" },
+    { key: "jade", name: "Jade Orchid", color: "#94d78d", center: "#f9ffd8", petals: 6, shape: "long" },
   ];
   const MOTIFS = ["lily", "koi", "duck", "reed", "ripple", "leaf"];
   const DIRS = [
@@ -38,7 +38,8 @@
     let audioCtx = null;
     let eventSeq = 0;
     let seenEventSeq = 0;
-    let ui = { board: null, hand: null, rotate: null, discard: null, reset: null, cells: new Map(), scale: 1 };
+    let ui = { board: null, hand: null, handTile: null, rotate: null, deck: null, reset: null, cells: new Map(), scale: 1 };
+    let drag = null;
     const events = [];
     const drops = [];
     const ripples = [];
@@ -47,11 +48,11 @@
     const state = {
       board: {},
       deck: [],
-      current: null,
+      hands: {},
+      currentByPlayer: {},
       blossoms: [],
       used: {},
       completed: {},
-      discards: 0,
       turn: 1,
       over: false,
       won: false,
@@ -78,7 +79,7 @@
         const tones = {
           place: [[330, 0.10, 0.025], [440, 0.16, 0.018]],
           blossom: [[520, 0.18, 0.030], [780, 0.26, 0.024], [1040, 0.34, 0.018]],
-          discard: [[180, 0.18, 0.018]],
+          draw: [[220, 0.12, 0.018], [360, 0.18, 0.016]],
           reset: [[260, 0.18, 0.020], [390, 0.24, 0.018]],
         };
         for (const [freq, dur, vol] of tones[kind] || tones.place) {
@@ -111,6 +112,8 @@
         for (let i = 0; i < 34; i++) particles.push({ x: evt.x, y: evt.y, vx: rand(-0.07, 0.07), vy: rand(-0.09, 0.035), color: evt.color, life: rand(520, 980), maxLife: 980, size: rand(2.5, 6.5) });
       } else if (evt.kind === "place") {
         ripples.push({ x: evt.x, y: evt.y, life: 780, maxLife: 780 });
+      } else if (evt.kind === "draw") {
+        ripples.push({ x: evt.x, y: evt.y, life: 520, maxLife: 520 });
       }
     }
 
@@ -129,58 +132,91 @@
       const names = BLOSSOMS.map((b) => b.key);
       const tiles = [];
       for (let i = 0; i < TILE_COUNT; i++) {
-        const a = names[i % names.length];
-        const b = names[(i + 1 + Math.floor(i / 3)) % names.length];
-        const c = names[(i + 3) % names.length];
-        const d = names[(i + 5 + Math.floor(i / 5)) % names.length];
-        tiles.push({ id: `rain-${i + 1}`, edges: [a, b, c, d], motif: MOTIFS[i % MOTIFS.length] });
+        const step = (i % 2) + 1;
+        const start = (i * 3 + Math.floor(i / 8)) % names.length;
+        const edges = [0, 1, 2, 3].map((n) => names[(start + n * step + Math.floor((i + n) / 7)) % names.length]);
+        while (new Set(edges).size < 4) {
+          const seen = new Set();
+          for (let e = 0; e < edges.length; e++) {
+            if (!seen.has(edges[e])) { seen.add(edges[e]); continue; }
+            edges[e] = names[(names.indexOf(edges[e]) + e + i + 1) % names.length];
+          }
+        }
+        tiles.push({ id: `rain-${String(i + 1).padStart(2, "0")}`, edges, motif: MOTIFS[i % MOTIFS.length] });
       }
       return tiles;
     }
 
-    function shuffle(list) {
-      for (let i = list.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [list[i], list[j]] = [list[j], list[i]];
+    function sortedPlayers() {
+      return host.getPlayers().map((p) => p.id).sort();
+    }
+
+    function liveTilePool() {
+      const pool = state.deck.slice();
+      for (const hand of Object.values(state.hands)) pool.push(...(hand || []));
+      for (const current of Object.values(state.currentByPlayer)) if (current?.tile) pool.push(current.tile);
+      return pool;
+    }
+
+    function dealEvenly(pool = liveTilePool()) {
+      const ids = sortedPlayers();
+      state.deck = [];
+      state.hands = {};
+      state.currentByPlayer = {};
+      if (!ids.length) {
+        state.deck = pool;
+        return;
       }
-      return list;
+      ids.forEach((id) => { state.hands[id] = []; });
+      pool.forEach((tile, i) => state.hands[ids[i % ids.length]].push(tile));
+      for (const id of ids) drawForPlayer(id);
+    }
+
+    function drawForPlayer(id) {
+      if (state.currentByPlayer[id]?.tile) return;
+      const hand = state.hands[id] || [];
+      state.currentByPlayer[id] = hand.length ? { tile: hand.shift(), rot: 0 } : null;
+      state.hands[id] = hand;
+    }
+
+    function currentFor(id = myId) {
+      return state.currentByPlayer[id] || null;
+    }
+
+    function remainingTiles() {
+      return state.deck.length
+        + Object.values(state.hands).reduce((sum, hand) => sum + (hand?.length || 0), 0)
+        + Object.values(state.currentByPlayer).filter((current) => current?.tile).length;
     }
 
     function resetHostState() {
-      const deck = shuffle(makeTiles());
+      const deck = makeTiles();
       const start = deck.shift();
       state.board = { [key(0, 0)]: { tile: start, rot: 0, owner: "system", turn: 0 } };
       state.deck = deck;
-      state.current = null;
+      state.hands = {};
+      state.currentByPlayer = {};
       state.blossoms = [];
       state.used = {};
       state.completed = {};
-      state.discards = 0;
       state.turn = 1;
       state.over = false;
       state.won = false;
-      state.message = "A single tile rests on the lake. Draw and place gently.";
-      drawNextTile();
+      state.message = "Drag your tile over the still lake. Release on a glowing space to place it.";
+      dealEvenly(deck);
       emitEvent("reset", 0.5, 0.5, "#8ed8ff");
     }
 
-    function drawNextTile() {
+    function checkEnd() {
       if (Object.keys(state.used).length >= BLOSSOMS.length) {
-        state.current = null;
         state.over = true;
         state.won = true;
-        state.message = `All eight blossoms are placed. Score ${score()} with ${state.deck.length} tiles unused.`;
-        return;
-      }
-      if (!state.deck.length) {
-        state.current = null;
+        state.message = `All eight blossoms are placed. Score ${score()} with ${remainingTiles()} tiles unused.`;
+      } else if (!remainingTiles()) {
         state.over = true;
         state.won = false;
         state.message = `The rain softens. ${Object.keys(state.used).length} blossoms placed.`;
-        return;
       }
-      state.current = { tile: state.deck.shift(), rot: 0 };
-      state.message = "Draw one tile. Rotate if needed, then tap a highlighted space.";
     }
 
     function rotatedEdges(tile, rot) {
@@ -190,7 +226,7 @@
 
     function cellEdges(cell) { return rotatedEdges(cell.tile, cell.rot || 0); }
 
-    function legalAt(x, y, current = state.current) {
+    function legalAt(x, y, current = currentFor()) {
       if (!current || state.board[key(x, y)]) return false;
       const edges = rotatedEdges(current.tile, current.rot || 0);
       let adjacent = false;
@@ -203,7 +239,7 @@
       return adjacent;
     }
 
-    function legalCellsFor(current = state.current) {
+    function legalCellsFor(current = currentFor()) {
       const result = [];
       const seen = new Set();
       for (const k of Object.keys(state.board)) {
@@ -216,14 +252,6 @@
         }
       }
       return result;
-    }
-
-    function hasLegalPlacementAnyRotation() {
-      if (!state.current) return false;
-      for (let r = 0; r < 4; r++) {
-        if (legalCellsFor({ tile: state.current.tile, rot: r }).length) return true;
-      }
-      return false;
     }
 
     function tryCompleteSquares(x, y) {
@@ -255,31 +283,38 @@
     }
 
     function placeTile(id, x, y) {
-      if (!state.current || state.over || !legalAt(x, y)) return;
-      state.board[key(x, y)] = { tile: state.current.tile, rot: state.current.rot || 0, owner: id, turn: state.turn++ };
+      const current = currentFor(id);
+      if (!current || state.over || !legalAt(x, y, current)) return;
+      state.board[key(x, y)] = { tile: current.tile, rot: current.rot || 0, owner: id, turn: state.turn++ };
       const p = boardToNorm(x, y);
       emitEvent("place", p.x, p.y, "#dff9ff");
       tryCompleteSquares(x, y);
-      if (!state.over) drawNextTile();
+      state.currentByPlayer[id] = null;
+      drawForPlayer(id);
+      checkEnd();
     }
 
-    function discardTile() {
-      if (!state.current || state.over || hasLegalPlacementAnyRotation()) return;
-      state.discards++;
-      state.message = "The tile drifts away; draw the next one.";
-      emitEvent("discard", 0.5, 0.84, "#b7d7ff");
-      drawNextTile();
+    function swapTile(id) {
+      const current = currentFor(id);
+      const hand = state.hands[id] || [];
+      if (!current?.tile || !hand.length || state.over) return;
+      hand.push(current.tile);
+      state.currentByPlayer[id] = { tile: hand.shift(), rot: 0 };
+      state.hands[id] = hand;
+      state.message = "The tile slips back into your stack and another rises from the rain.";
+      emitEvent("draw", 0.18, 0.84, "#b7d7ff");
     }
 
     function handleAction(id, input) {
       if (!isHost() || !input || typeof input !== "object") return;
-      if (input.type === "rotate" && state.current && !state.over) {
-        state.current.rot = ((state.current.rot || 0) + 1) % 4;
+      if (input.type === "rotate" && currentFor(id) && !state.over) {
+        const current = currentFor(id);
+        current.rot = ((current.rot || 0) + 1) % 4;
         state.message = "The tile turns softly in your hands.";
       } else if (input.type === "place") {
         placeTile(id, Math.round(input.x), Math.round(input.y));
-      } else if (input.type === "discard") {
-        discardTile();
+      } else if (input.type === "swap") {
+        swapTile(id);
       } else if (input.type === "reset") {
         resetHostState();
       }
@@ -293,7 +328,7 @@
 
     function score() {
       const placed = Object.keys(state.used).length;
-      return placed >= BLOSSOMS.length ? placed + state.deck.length : placed;
+      return placed >= BLOSSOMS.length ? placed + remainingTiles() : placed;
     }
 
     function makeSnapshot() {
@@ -301,11 +336,11 @@
         full: true,
         board: state.board,
         deck: state.deck,
-        current: state.current,
+        hands: state.hands,
+        currentByPlayer: state.currentByPlayer,
         blossoms: state.blossoms,
         used: state.used,
         completed: state.completed,
-        discards: state.discards,
         turn: state.turn,
         over: state.over,
         won: state.won,
@@ -320,11 +355,11 @@
       if (!snapshot) return;
       state.board = snapshot.board || {};
       state.deck = snapshot.deck || [];
-      state.current = snapshot.current || null;
+      state.hands = snapshot.hands || {};
+      state.currentByPlayer = snapshot.currentByPlayer || {};
       state.blossoms = snapshot.blossoms || [];
       state.used = snapshot.used || {};
       state.completed = snapshot.completed || {};
-      state.discards = snapshot.discards || 0;
       state.turn = snapshot.turn || 1;
       state.over = !!snapshot.over;
       state.won = !!snapshot.won;
@@ -352,7 +387,7 @@
 
     function boardBounds() {
       const pts = Object.keys(state.board).map(parseKey);
-      const legal = legalCellsFor();
+      const legal = legalCellsFor(currentFor());
       for (const p of legal) pts.push(p);
       for (const b of state.blossoms) pts.push({ x: Math.floor(b.x), y: Math.floor(b.y) });
       if (!pts.length) return { minX: -2, maxX: 2, minY: -2, maxY: 2 };
@@ -366,7 +401,7 @@
 
     function layout(W, H) {
       const top = Math.max(88, Math.min(120, H * 0.18));
-      const handH = Math.max(132, Math.min(178, H * 0.24));
+      const handH = Math.max(142, Math.min(188, H * 0.25));
       const margin = Math.max(12, Math.min(22, W * 0.04));
       const board = { x: margin, y: top, w: W - margin * 2, h: H - top - handH - margin };
       const bounds = boardBounds();
@@ -376,8 +411,9 @@
       ui = {
         board,
         hand: { x: margin, y: H - handH + 10, w: W - margin * 2, h: handH - 18 },
+        handTile: { x: margin + 22, y: H - handH + 70, w: Math.min(90, handH - 44), h: Math.min(90, handH - 44) },
         rotate: { x: W - margin - 112, y: H - handH + 30, w: 104, h: 42 },
-        discard: { x: W - margin - 112, y: H - handH + 80, w: 104, h: 42 },
+        deck: { x: W - margin - 108, y: H - handH + 84, w: 92, h: 70 },
         reset: { x: margin, y: 52, w: 84, h: 32 },
         cells: new Map(),
         scale: cell,
@@ -406,6 +442,19 @@
     function screenCell(px, py) {
       for (const [k, r] of ui.cells) if (pointIn(r, px, py)) return parseKey(k);
       return null;
+    }
+
+    function nearestEmptyCell(px, py, maxDist = Infinity) {
+      let best = null;
+      let bestD = maxDist;
+      for (const [k, r] of ui.cells) {
+        if (state.board[k]) continue;
+        const cx = r.x + r.w / 2;
+        const cy = r.y + r.h / 2;
+        const d = Math.hypot(px - cx, py - cy);
+        if (d < bestD) { bestD = d; best = parseKey(k); }
+      }
+      return best;
     }
 
     function drawRoundRect(x, y, w, h, r) {
@@ -471,7 +520,7 @@
       ctx.shadowBlur = 0;
       ctx.font = "13px system-ui, sans-serif";
       ctx.fillStyle = "rgba(233,249,255,0.82)";
-      ctx.fillText(`${Object.keys(state.used).length}/8 blossoms · ${state.deck.length + (state.current ? 1 : 0)} tiles left · score ${score()}`, W / 2, 64);
+      ctx.fillText(`${Object.keys(state.used).length}/8 blossoms · ${remainingTiles()} tiles unplaced · score ${score()}`, W / 2, 64);
       drawButton(ui.reset, "Reset", "#21495c", true);
     }
 
@@ -519,6 +568,33 @@
       ctx.restore();
     }
 
+    function drawDeckStack() {
+      const r = ui.deck;
+      const count = (state.hands[myId]?.length || 0);
+      const layers = Math.min(9, Math.max(1, count));
+      ctx.save();
+      for (let i = layers - 1; i >= 0; i--) {
+        const off = i * 2.4;
+        ctx.fillStyle = count ? "rgba(211,232,224,0.92)" : "rgba(83,108,114,0.45)";
+        drawRoundRect(r.x + off, r.y - off, r.w - 12, r.h - 10, 9);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,0.22)";
+        ctx.stroke();
+      }
+      ctx.fillStyle = "rgba(27,76,87,0.88)";
+      drawRoundRect(r.x + 10, r.y + 12, r.w - 28, r.h - 32, 7);
+      ctx.fill();
+      ctx.fillStyle = "#eafff8";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "900 18px system-ui, sans-serif";
+      ctx.fillText(String(count), r.x + r.w / 2 - 6, r.y + r.h / 2 - 2);
+      ctx.font = "11px system-ui, sans-serif";
+      ctx.fillStyle = "rgba(235,255,249,0.72)";
+      ctx.fillText("deck", r.x + r.w / 2 - 6, r.y + r.h - 8);
+      ctx.restore();
+    }
+
     function drawMotif(motif, x, y, size) {
       ctx.save();
       ctx.translate(x + size * 0.5, y + size * 0.52);
@@ -552,21 +628,46 @@
     }
 
     function drawEdgeFlower(cx, cy, colorKey, angle, size) {
+      const def = blossom(colorKey);
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate(angle);
-      ctx.fillStyle = tileColor(colorKey);
-      ctx.strokeStyle = "rgba(255,255,255,0.62)";
-      ctx.lineWidth = Math.max(1, size * 0.012);
       ctx.beginPath();
-      ctx.ellipse(0, size * 0.018, size * 0.082, size * 0.038, 0, Math.PI, Math.PI * 2);
+      ctx.rect(-size * 0.18, 0, size * 0.36, size * 0.20);
+      ctx.clip();
+      for (let i = 0; i < def.petals; i++) {
+        const a = -Math.PI + (i + 0.5) * Math.PI / def.petals;
+        const px = Math.cos(a) * size * 0.055;
+        const py = Math.sin(a) * size * 0.055;
+        ctx.save();
+        ctx.translate(px, py);
+        ctx.rotate(a + Math.PI / 2);
+        ctx.fillStyle = def.color;
+        ctx.strokeStyle = "rgba(255,255,255,0.68)";
+        ctx.lineWidth = Math.max(0.7, size * 0.008);
+        ctx.beginPath();
+        if (def.shape === "point") ctx.moveTo(0, -size * 0.010), ctx.quadraticCurveTo(size * 0.045, size * 0.035, 0, size * 0.105), ctx.quadraticCurveTo(-size * 0.045, size * 0.035, 0, -size * 0.010);
+        else if (def.shape === "heart") ctx.ellipse(0, size * 0.045, size * 0.040, size * 0.055, 0, 0, Math.PI * 2);
+        else if (def.shape === "wide") ctx.ellipse(0, size * 0.045, size * 0.052, size * 0.040, 0, 0, Math.PI * 2);
+        else ctx.ellipse(0, size * 0.052, size * 0.034, size * 0.072, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+      ctx.fillStyle = def.center;
+      ctx.beginPath();
+      ctx.arc(0, 0, size * 0.040, 0, Math.PI * 2);
       ctx.fill();
+      ctx.strokeStyle = "rgba(40,31,26,0.35)";
+      ctx.lineWidth = Math.max(0.8, size * 0.007);
       ctx.stroke();
       ctx.restore();
     }
 
     function drawBoard() {
-      const legal = new Set(legalCellsFor().map((p) => key(p.x, p.y)));
+      const current = currentFor();
+      const legal = new Set(legalCellsFor(current).map((p) => key(p.x, p.y)));
+      const hoverKey = drag?.hover && legalAt(drag.hover.x, drag.hover.y, current) ? key(drag.hover.x, drag.hover.y) : null;
       ctx.save();
       ctx.fillStyle = "rgba(227,249,255,0.045)";
       drawRoundRect(ui.board.x, ui.board.y, ui.board.w, ui.board.h, 22);
@@ -585,12 +686,14 @@
         const { x, y } = parseKey(k);
         const p = gridToScreen(x, y);
         ui.cells.set(k, { x: p.x, y: p.y, w: ui.scale, h: ui.scale });
-        ctx.fillStyle = "rgba(211,255,244,0.11)";
-        ctx.strokeStyle = "rgba(211,255,244,0.50)";
-        ctx.lineWidth = 2;
+        const hovering = k === hoverKey;
+        ctx.fillStyle = hovering ? "rgba(211,255,244,0.26)" : "rgba(211,255,244,0.08)";
+        ctx.strokeStyle = hovering ? "rgba(235,255,249,0.92)" : "rgba(211,255,244,0.30)";
+        ctx.lineWidth = hovering ? 3 : 1.5;
         drawRoundRect(p.x + 4, p.y + 4, ui.scale - 8, ui.scale - 8, ui.scale * 0.10);
         ctx.fill();
         ctx.stroke();
+        if (hovering && current?.tile) drawTile(current.tile, current.rot || 0, p.x + 1, p.y + 1, ui.scale - 2, 0.28, null);
       }
 
       for (const b of state.blossoms) {
@@ -644,18 +747,18 @@
       ctx.fillStyle = "rgba(223,246,255,0.62)";
       ctx.fillText("Match touching flower halves. Finish a 2×2 pond opening to place a blossom.", h.x + 18, h.y + 38, Math.max(180, h.w - 150));
 
-      if (state.current) {
-        const size = Math.min(82, h.h - 38, W * 0.22);
-        drawTile(state.current.tile, state.current.rot || 0, h.x + 22, h.y + h.h - size - 16, size, 1, null);
+      const current = currentFor();
+      if (current?.tile && !drag) {
+        const size = ui.handTile.w;
+        drawTile(current.tile, current.rot || 0, ui.handTile.x, ui.handTile.y, size, 1, null);
       } else {
         ctx.font = "700 18px Georgia, serif";
         ctx.fillStyle = state.won ? "#d3fff4" : "#d9eaff";
-        ctx.fillText(state.won ? "The lake is blooming." : "The tile stack is empty.", h.x + 24, h.y + 78);
+        ctx.fillText(state.won ? "The lake is blooming." : "No active tile.", h.x + 24, h.y + 78);
       }
 
-      const canDiscard = !!state.current && !hasLegalPlacementAnyRotation();
-      drawButton(ui.rotate, "Rotate", "#2f6674", !!state.current && !state.over);
-      drawButton(ui.discard, "Discard", canDiscard ? "#6b5572" : "#314654", canDiscard);
+      drawButton(ui.rotate, "Rotate", "#2f6674", !!current?.tile && !state.over);
+      drawDeckStack();
 
       const tokenX = h.x + Math.min(h.w - 148, 126);
       const tokenY = h.y + h.h - 54;
@@ -670,6 +773,7 @@
         ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill();
         ctx.globalAlpha = 1;
       }
+      if (drag?.tile) drawTile(drag.tile, drag.rot || 0, drag.x - drag.size / 2, drag.y - drag.size / 2, drag.size, 0.92, null);
     }
 
     function updateEffects(dt, W, H) {
@@ -733,24 +837,37 @@
       const p = pointerPoint(e);
       if (pointIn(ui.reset, p.x, p.y)) { e.preventDefault(); sendAction({ type: "reset" }); return; }
       if (pointIn(ui.rotate, p.x, p.y)) { e.preventDefault(); sendAction({ type: "rotate" }); return; }
-      if (pointIn(ui.discard, p.x, p.y)) { e.preventDefault(); sendAction({ type: "discard" }); return; }
-      const cell = screenCell(p.x, p.y);
-      if (cell && legalAt(cell.x, cell.y)) {
+      if (pointIn(ui.deck, p.x, p.y)) { e.preventDefault(); sendAction({ type: "swap" }); return; }
+      const current = currentFor();
+      if (current?.tile && pointIn(ui.handTile, p.x, p.y)) {
         e.preventDefault();
         activePointerId = e.pointerId ?? null;
         canvas.setPointerCapture?.(activePointerId);
-        sendAction({ type: "place", x: cell.x, y: cell.y });
+        drag = { tile: current.tile, rot: current.rot || 0, x: p.x, y: p.y, size: ui.handTile.w, hover: null };
+        return;
       }
     }
 
-    function onPointerUp() {
+    function onPointerMove(e) {
+      if (!drag) return;
+      e.preventDefault();
+      const p = pointerPoint(e);
+      drag.x = p.x;
+      drag.y = p.y;
+      drag.hover = nearestEmptyCell(p.x, p.y, ui.scale * 0.82);
+    }
+
+    function onPointerUp(e) {
+      const hover = drag?.hover;
+      if (hover && legalAt(hover.x, hover.y)) sendAction({ type: "place", x: hover.x, y: hover.y });
+      drag = null;
       if (activePointerId !== null && canvas.hasPointerCapture?.(activePointerId)) canvas.releasePointerCapture(activePointerId);
       activePointerId = null;
     }
 
     function onKeyDown(e) {
       if (e.key === "r" || e.key === "R" || e.key === " ") { e.preventDefault(); sendAction({ type: "rotate" }); }
-      else if (e.key === "d" || e.key === "D") { e.preventDefault(); sendAction({ type: "discard" }); }
+      else if (e.key === "d" || e.key === "D") { e.preventDefault(); sendAction({ type: "swap" }); }
     }
 
     function loop(ts) {
@@ -774,14 +891,17 @@
         window.addEventListener("resize", resize);
         if (window.PointerEvent) {
           canvas.addEventListener("pointerdown", onPointerDown);
+          canvas.addEventListener("pointermove", onPointerMove);
           canvas.addEventListener("pointerup", onPointerUp);
           canvas.addEventListener("pointercancel", onPointerUp);
           canvas.addEventListener("lostpointercapture", onPointerUp);
         } else {
           canvas.addEventListener("touchstart", onPointerDown, { passive: false });
+          window.addEventListener("touchmove", onPointerMove, { passive: false });
           window.addEventListener("touchend", onPointerUp);
           window.addEventListener("touchcancel", onPointerUp);
           canvas.addEventListener("mousedown", onPointerDown);
+          window.addEventListener("mousemove", onPointerMove);
           window.addEventListener("mouseup", onPointerUp);
         }
         window.addEventListener("keydown", onKeyDown);
@@ -794,14 +914,17 @@
         window.removeEventListener("resize", resize);
         if (window.PointerEvent) {
           canvas.removeEventListener("pointerdown", onPointerDown);
+          canvas.removeEventListener("pointermove", onPointerMove);
           canvas.removeEventListener("pointerup", onPointerUp);
           canvas.removeEventListener("pointercancel", onPointerUp);
           canvas.removeEventListener("lostpointercapture", onPointerUp);
         } else {
           canvas.removeEventListener("touchstart", onPointerDown);
+          window.removeEventListener("touchmove", onPointerMove);
           window.removeEventListener("touchend", onPointerUp);
           window.removeEventListener("touchcancel", onPointerUp);
           canvas.removeEventListener("mousedown", onPointerDown);
+          window.removeEventListener("mousemove", onPointerMove);
           window.removeEventListener("mouseup", onPointerUp);
         }
         window.removeEventListener("keydown", onKeyDown);
@@ -809,7 +932,7 @@
       onPeerInput(id, input) { handleAction(id, input); },
       onState(snapshot) { applySnapshot(snapshot); },
       getSnapshot() { return currentSnapshot(); },
-      onPlayerList() {},
+      onPlayerList() { if (isHost()) { dealEvenly(); host.broadcastState(makeSnapshot()); } },
       restart() { if (isHost()) resetHostState(); },
     };
   }
