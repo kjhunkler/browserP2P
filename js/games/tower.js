@@ -342,25 +342,29 @@
       const below = corners(b).filter((p) => p.y > FLOOR_Y);
       if (!below.length) return;
       const n = { x: 0, y: -1 };
+      const count = below.length;
+      // Resolve penetration once up front so every contact shares the same lever arm.
+      let maxDepth = 0;
+      for (const p of below) maxDepth = Math.max(maxDepth, p.y - FLOOR_Y);
+      b.y -= maxDepth * 0.92;
+      // Solve all contacts against a frozen velocity snapshot so corner order can't bias drift.
+      const vx0 = b.vx, vy0 = b.vy, av0 = b.av;
+      const ry = FLOOR_Y - b.y;
       for (const p of below) {
-        const depth = p.y - FLOOR_Y;
-        b.y -= depth / below.length * 0.92;
         const rx = p.x - b.x;
-        const ry = p.y - b.y;
-        const vx = b.vx - b.av * ry;
-        const vy = b.vy + b.av * rx;
+        const vx = vx0 - av0 * ry;
+        const vy = vy0 + av0 * rx;
         const velN = vx * n.x + vy * n.y;
-        if (velN < 0) {
-          const rCn = cross(rx, ry, n.x, n.y);
-          const inv = b.invMass + rCn * rCn * b.invI;
-          const j = -(1 + RESTITUTION) * velN / Math.max(0.0001, inv);
-          applyImpulse(b, n.x * j, n.y * j, p.x, FLOOR_Y);
-          const tx = 1, ty = 0;
-          const vt = vx * tx + vy * ty;
-          const jt = -vt / Math.max(0.0001, inv);
-          const fj = clamp(jt, -j * FRICTION, j * FRICTION);
-          applyImpulse(b, tx * fj, ty * fj, p.x, FLOOR_Y);
-        }
+        if (velN >= 0) continue;
+        const rCn = cross(rx, ry, n.x, n.y);
+        const inv = b.invMass + rCn * rCn * b.invI;
+        const j = (-(1 + RESTITUTION) * velN / Math.max(0.0001, inv)) / count;
+        applyImpulse(b, n.x * j, n.y * j, p.x, FLOOR_Y);
+        const tx = 1, ty = 0;
+        const vt = vx * tx + vy * ty;
+        const jt = (-vt / Math.max(0.0001, inv)) / count;
+        const fj = clamp(jt, -Math.abs(j) * FRICTION, Math.abs(j) * FRICTION);
+        applyImpulse(b, tx * fj, ty * fj, p.x, FLOOR_Y);
       }
       if (Math.abs(b.vy) < 0.006) b.vy = 0;
       if (Math.abs(b.vx) < 0.004) b.vx = 0;
