@@ -4,11 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=4, user-scalable=yes, viewport-fit=cover" />
   <meta name="theme-color" content="#12121f" />
-  <title>browserP2P</title>
+  <title>ClasslessRPG</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/robot.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icons/robot.svg" />
-  <link rel="stylesheet" href="css/style.css?v=2.5.17" />
+  <link rel="stylesheet" href="css/style.css?v=2.6.0" />
 </head>
 <body>
   <div id="app">
@@ -16,23 +16,26 @@
     <!-- ===== Menu ===== -->
     <section id="screen-menu" class="screen active">
       <button id="btn-menu-settings" class="hud-btn hud-top-left" aria-label="Settings">⚙️</button>
-      <h1 class="title">browser<span>P2P</span></h1>
+      <h1 class="title">Classless<span>RPG</span></h1>
       <p id="menu-version" class="menu-version"></p>
-      <p class="tagline">Phone-to-phone over your Wi-Fi. Joining lobby…</p>
+      <p class="tagline">Choose a realm, join with a code, or host your own table.</p>
 
-      <button id="btn-auto" class="btn btn-primary btn-big">Play</button>
-      <p id="auto-status" class="status">Finds or starts the game on your Wi-Fi.</p>
-
-      <div class="divider"><span>advanced — use a code</span></div>
-
-      <button id="btn-host" class="btn">Host with a code</button>
-
-      <div class="join-row">
-        <input id="code-input" class="code-input" maxlength="4" autocapitalize="characters"
-               autocomplete="off" placeholder="CODE" inputmode="text" />
-        <button id="btn-join" class="btn">Join</button>
+      <div class="code-card">
+        <div class="code-card-title">Join / host with code</div>
+        <div class="join-row">
+          <input id="code-input" class="code-input" maxlength="12" autocapitalize="characters"
+                 autocomplete="off" placeholder="CODE" inputmode="text" />
+          <button id="btn-join" class="btn">Join</button>
+        </div>
+        <button id="btn-host" class="btn btn-primary">Host with this code</button>
+        <p id="join-status" class="status"></p>
       </div>
-      <p id="join-status" class="status"></p>
+
+      <div class="divider"><span>elemental lobbies</span></div>
+
+      <div id="lobby-grid" class="lobby-grid" aria-live="polite"></div>
+
+      <button id="btn-refresh-lobbies" class="btn btn-small">Refresh lobbies</button>
     </section>
 
     <!-- ===== Lobby (host) ===== -->
@@ -160,11 +163,24 @@
       </div>
 
       <div class="field-group app-update-group">
+          <label>Lobby</label>
+          <div class="join-row settings-code-row">
+              <input id="settings-code-input" class="code-input" maxlength="12" autocapitalize="characters"
+                     autocomplete="off" placeholder="CODE" inputmode="text" />
+              <button id="btn-settings-join" class="btn btn-small" type="button">Join</button>
+              <button id="btn-settings-host" class="btn btn-small btn-primary" type="button">Host</button>
+          </div>
+          <button id="btn-share-lobby" class="btn btn-small" type="button">Share current lobby</button>
+          <p id="settings-lobby-status" class="status"></p>
+      </div>
+
+      <div class="field-group app-update-group">
           <label>Display</label>
           <div class="version-row">
               <span>Keep screen awake</span>
               <button id="btn-keep-awake" class="btn btn-small" type="button">Off</button>
           </div>
+
           <p id="wake-status" class="status"></p>
       </div>
       <div class="field-group app-update-group">
@@ -178,12 +194,17 @@
       <div class="field-group app-update-group">
           <label>App</label>
           <div class="version-row">
-              <span>Version <strong id="app-version">2.5.17</strong></span>
+              <span>Version <strong id="app-version">2.6.0</strong></span>
               <button id="btn-check-update" class="btn btn-small" type="button">Check for updates</button>
           </div>
           <p id="update-status" class="status"></p>
       </div>
   </div>
+
+  <details id="online-dropdown" class="online-dropdown">
+    <summary><span id="online-count">0</span> online</summary>
+    <div id="online-list" class="online-list"></div>
+  </details>
 
   <!-- ===== Chat panel (slides up from bottom) ===== -->
   <div id="panel-chat" class="chat-panel" aria-hidden="true">
@@ -204,13 +225,13 @@
   <!-- QR code rendering for the join link -->
   <script src="https://cdn.jsdelivr.net/gh/davidshimjs/qrcodejs/qrcode.min.js"></script>
 
-  <script src="js/peer-net.js?v=2.5.17"></script>
-  <script src="js/games/digger.js?v=2.5.17"></script>
-  <script src="js/games/air-hockey.js?v=2.5.17"></script>
-  <script src="js/games/paint-panic.js?v=2.5.17"></script>
-  <script src="js/games/tower.js?v=2.5.17"></script>
-  <script src="js/games/snow-brawl.js?v=2.5.17"></script>
-  <script src="js/games/gentle-rain.js?v=2.5.17"></script>
-  <script src="js/app.js?v=2.5.17"></script>
+  <script src="js/peer-net.js?v=2.6.0"></script>
+  <script src="js/games/digger.js?v=2.6.0"></script>
+  <script src="js/games/air-hockey.js?v=2.6.0"></script>
+  <script src="js/games/paint-panic.js?v=2.6.0"></script>
+  <script src="js/games/tower.js?v=2.6.0"></script>
+  <script src="js/games/snow-brawl.js?v=2.6.0"></script>
+  <script src="js/games/gentle-rain.js?v=2.6.0"></script>
+  <script src="js/app.js?v=2.6.0"></script>
 </body>
 </html>

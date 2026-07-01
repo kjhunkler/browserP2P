@@ -43,13 +43,21 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.5.17";
+const APP_VERSION = "2.6.0";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
 const RESTORE_PLAY_KEY = "bp2p-restore-play";
+const CURRENT_LOBBY_KEY = "bp2p-current-lobby";
 
-// Channel scopes the auto-join host id. Empty = global default.
+const ELEMENTAL_LOBBIES = [
+  { id: "FIRE", name: "Fire", icon: "🔥" },
+  { id: "EARTH", name: "Earth", icon: "⛰️" },
+  { id: "WATER", name: "Water", icon: "💧" },
+  { id: "AIR", name: "Air", icon: "🌬️" },
+];
+
+// Channel scopes the legacy host migration id. Empty = global default.
 const AUTO_CHANNEL = "";
 
 const PERF_WARN_MS = 50;
@@ -279,7 +287,7 @@ function notifyPlayerJoined(name) {
   if (!canNotify()) return;
   if (document.visibilityState === "visible" && !profileOpen && !chatOpen) return;
 
-  const notification = new Notification("browserP2P", {
+  const notification = new Notification("ClasslessRPG", {
     body: `${name} joined the lobby`,
     icon: "icons/robot.svg",
     tag: "browserp2p-player-joined",
@@ -324,8 +332,9 @@ profiles.set(MY_ID, { name: profile.name, color: myColor, icon: profile.icon });
 
 // ============================================================ NET ==========
 let net = new PeerNet();
-let autoMode = true;
-let hasLeftLobby = false;
+let activity = new PeerActivity();
+let autoMode = false;
+let hasLeftLobby = true;
 let migratingFromHostId = null;
 let keepPlayingAfterMigration = false;
 let yieldedHostForBackground = false;
@@ -333,6 +342,10 @@ let pendingMigratedGameState = null;
 let playStarted = false;
 let hostLoopLastTick = 0;
 let hostThrottleStrikes = 0;
+let currentLobby = null;
+const lobbyStatuses = new Map();
+let onlineUsers = [];
+let lastActivityUpdate = 0;
 
 // ============================================================ DOM ===========
 const $ = (sel) => document.querySelector(sel);
@@ -362,6 +375,42 @@ function addPlayer(id, name, peerId, icon, preferredColor) {
     profiles.set(id, { name: p.name, color: p.color, icon: p.icon });
     return p;
   }
+
+function lobbyDisplayName(code) {
+  return ELEMENTAL_LOBBIES.find((l) => l.id === code)?.name || code || "Custom";
+}
+
+function saveCurrentLobby(code, role) {
+  currentLobby = { code, role, name: lobbyDisplayName(code) };
+  localStorage.setItem(CURRENT_LOBBY_KEY, JSON.stringify(currentLobby));
+  updateActivityStatus();
+}
+
+function clearCurrentLobby() {
+  currentLobby = null;
+  localStorage.removeItem(CURRENT_LOBBY_KEY);
+  updateActivityStatus();
+}
+
+function currentLobbyInfo() {
+  return {
+    app: "ClasslessRPG",
+    version: APP_VERSION,
+    name: profile.name,
+    icon: profile.icon,
+    players: net.isHost ? players.size : lastState.length,
+    lobby: currentLobby?.name || lobbyDisplayName(net.code),
+  };
+}
+
+function updateHostedLobbyInfo() {
+  if (net?.setLobbyInfo) net.setLobbyInfo(currentLobbyInfo());
+  updateActivityStatus();
+}
+
+function getStoredLobby() {
+  try { return JSON.parse(localStorage.getItem(CURRENT_LOBBY_KEY) || "null"); } catch { return null; }
+}
   let color;
   if (preferredColor && !usedColors.has(preferredColor)) {
     color = preferredColor;
@@ -380,6 +429,7 @@ function addPlayer(id, name, peerId, icon, preferredColor) {
 function wireNetEvents() {
   net.on("ready", async () => {
     yieldedHostForBackground = false;
+    saveCurrentLobby(net.code, "host");
     players.clear();
     peerMap.clear();
     usedColors.clear();
@@ -411,6 +461,7 @@ function wireNetEvents() {
     pendingMigratedGameState = null;
     announceCameraOn();
     renderLobby();
+    refreshLobbyCards();
     const restorePlay = keepPlayingAfterMigration || shouldRestorePlay();
     show(restorePlay ? "play" : "lobby");
     playStarted = restorePlay;
@@ -425,6 +476,7 @@ function wireNetEvents() {
 
   net.on("connected", () => {
     yieldedHostForBackground = false;
+    saveCurrentLobby(net.code, "client");
     net.send({ t: "hello", id: MY_ID, name: profile.name, icon: profile.icon, preferredColor: profile.color });
     announceCameraOn();
     show(keepPlayingAfterMigration ? "play" : "lobby");
@@ -432,7 +484,7 @@ function wireNetEvents() {
   });
 
   net.on("host-closed", () => {
-    migrateFromHost("host migration snapshot");
+    handleHostClosed();
   });
 
   net.on("host-yield", (reason) => {
@@ -442,7 +494,13 @@ function wireNetEvents() {
 
   net.on("error", (err) => {
     console.error(err);
-    setStatus("Connection error: " + (err.type || err.message || err));
+    setStatus("Connection error: " + (err.type === "unavailable-id" ? "That lobby is already hosted." : (err.type || err.message || err)));
+    if (err.type === "unavailable-id" && currentLobby?.role === "host") {
+      clearCurrentLobby();
+      hasLeftLobby = true;
+      show("menu");
+      refreshLobbyCards();
+    }
   });
 
   net.on("message", ({ from, data }) => {
@@ -481,6 +539,20 @@ function migrateFromHost(snapshotReason) {
   }, delay);
 }
 
+function handleHostClosed() {
+  if (hasLeftLobby) return;
+  if (!autoMode) {
+    setStatus("The host left this lobby.");
+    clearCurrentLobby();
+    stopHostLoop();
+    net.destroy();
+    show("menu");
+    refreshLobbyCards();
+    return;
+  }
+  migrateFromHost("host migration snapshot");
+}
+
 // ---- host-side message handling ----
 function handleHostMsg(peerId, msg) {
   if (msg.t === "hello") {
@@ -497,6 +569,7 @@ function handleHostMsg(peerId, msg) {
     net.broadcast({ t: "sys", text: p.name + " joined" });
     if (p.id !== MY_ID) notifyPlayerJoined(p.name);
     renderLobby();
+    updateHostedLobbyInfo();
     notifyActiveGamePlayersChanged();
 
   } else if (msg.t === "leave") {
@@ -542,6 +615,7 @@ function markPeerDisconnected(peerId) {
   pushSys(name + " left");
   net.broadcast({ t: "sys", text: name + " left" });
   renderLobby();
+  updateHostedLobbyInfo();
   notifyActiveGamePlayersChanged();
 }
     profiles.set(id, { name: p.name, color: p.color, icon: p.icon });
@@ -752,6 +826,7 @@ function startHostLoop() {
     net.broadcast({ t: "dnd-state", state: dndSharedState });
     lastState = list;
     lastHostOrder = hostOrder;
+    updateHostedLobbyInfo();
   }, 1000 / TICK_HZ);
 }
 
@@ -2345,6 +2420,8 @@ function openProfileSheet() {
   profileOpen = true;
   // Populate fields from current profile.
   $("#input-name").value = profile.name;
+  const settingsCode = $("#settings-code-input");
+  if (settingsCode) settingsCode.value = currentLobby?.code || net.code || "";
   buildColorPicker();
   buildIconPicker();
   updateProfilePreview();
@@ -2380,11 +2457,11 @@ function leaveLobby() {
   drawing = false;
   currentStroke = null;
   setDrawMode(false);
+  clearCurrentLobby();
   closeProfileSheet();
   show("menu");
-  $("#btn-auto").disabled = false;
-  $("#auto-status").textContent = "Finds or starts the game on your Wi-Fi.";
   setStatus("");
+  refreshLobbyCards();
 }
 
 function startPlaying(broadcast = true) {
@@ -2396,16 +2473,44 @@ function startPlaying(broadcast = true) {
   if (broadcast && net.isHost) net.broadcast({ t: "play" });
 }
 
-function enterDefaultLobby() {
-  if (!net.peer && !net.hostConn && !net.isHost) {
-    net = new PeerNet();
-    wireNetEvents();
-  }
+function resetNetworkForLobby() {
+  stopHostLoop();
+  try { net.destroy(); } catch {}
+  net = new PeerNet();
+  wireNetEvents();
+  players.clear();
+  peerMap.clear();
+  liveVideoPeers.clear();
+  usedColors.clear();
+  lobbyListKey = "";
+  lastState = [];
+  lastHostOrder = [];
+  playStarted = false;
+  setRestorePlay(false);
+}
+
+function hostCode(code) {
+  code = sanitizeLobbyCode(code);
+  if (!code) { setStatus("Enter a code to host."); return; }
+  resetNetworkForLobby();
+  autoMode = false;
   hasLeftLobby = false;
-  autoMode = true;
+  keepPlayingAfterMigration = false;
+  yieldedHostForBackground = false;
+  currentLobby = { code, role: "host", name: lobbyDisplayName(code) };
+  updateHostedLobbyInfo();
+  setStatus("Hosting " + lobbyDisplayName(code) + "…");
   renderLobby();
   show("lobby");
-  net.auto(AUTO_CHANNEL);
+  net.host(code);
+}
+
+function joinLobbyCode(code) {
+  code = sanitizeLobbyCode(code);
+  if (!code) { setStatus("Enter a code to join."); return; }
+  resetNetworkForLobby();
+  playStarted = false;
+  joinCode(code);
 }
 
 function buildColorPicker() {
@@ -2457,6 +2562,7 @@ function updateProfilePreview() {
   $("#preview-dot").style.background = color;
   $("#preview-dot").textContent = profile.icon;
   $("#preview-name").textContent = profile.name;
+  updateActivityStatus();
 }
 
 function broadcastProfile() {
@@ -2475,11 +2581,13 @@ function broadcastProfile() {
       }
       profiles.set(MY_ID, { name: me.name, color: me.color, icon: me.icon });
       net.broadcast({ t: "profile", id: MY_ID, name: me.name, color: me.color, icon: me.icon });
+      updateHostedLobbyInfo();
     }
     renderChat();
   } else {
     net.send(msg);
   }
+  updateActivityStatus();
 }
 
 // Name input: debounce to avoid broadcasting every keystroke.
@@ -2522,6 +2630,130 @@ function renderLobby() {
     lobbyListKey = nextListKey;
   }
   $("#player-count").textContent = lobbyPlayers.length;
+}
+
+function sanitizeLobbyCode(code) {
+  return String(code || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 12);
+}
+
+function buildLobbyCards() {
+  const grid = $("#lobby-grid");
+  if (!grid) return;
+  grid.innerHTML = "";
+  for (const lobby of ELEMENTAL_LOBBIES) {
+    const card = document.createElement("div");
+    card.className = "lobby-card " + lobby.name.toLowerCase();
+    card.dataset.lobby = lobby.id;
+    card.innerHTML = `
+      <div>
+        <div class="lobby-pill">${esc(lobby.id)}</div>
+        <div class="lobby-name">${lobby.icon} ${esc(lobby.name)}</div>
+        <div class="lobby-meta">Checking for a host…</div>
+      </div>
+      <div class="lobby-actions">
+        <button class="btn btn-primary" data-action="join" type="button">Join</button>
+        <button class="btn" data-action="host" type="button">Host</button>
+      </div>`;
+    card.querySelector('[data-action="join"]').addEventListener("click", () => joinLobbyCode(lobby.id));
+    card.querySelector('[data-action="host"]').addEventListener("click", () => hostCode(lobby.id));
+    grid.appendChild(card);
+  }
+}
+
+function renderLobbyCards() {
+  for (const lobby of ELEMENTAL_LOBBIES) {
+    const card = document.querySelector(`[data-lobby="${lobby.id}"]`);
+    if (!card) continue;
+    const status = lobbyStatuses.get(lobby.id);
+    const meta = card.querySelector(".lobby-meta");
+    const joinBtn = card.querySelector('[data-action="join"]');
+    const hostBtn = card.querySelector('[data-action="host"]');
+    if (!status) {
+      meta.textContent = "Checking for a host…";
+      joinBtn.disabled = true;
+      hostBtn.disabled = true;
+    } else if (status.online) {
+      meta.textContent = `${status.info?.name || "Someone"} is hosting · v${status.info?.version || "?"} · ${status.info?.players || 1} player${(status.info?.players || 1) === 1 ? "" : "s"}`;
+      joinBtn.disabled = false;
+      hostBtn.disabled = true;
+    } else {
+      meta.textContent = "Open lobby · become the host";
+      joinBtn.disabled = true;
+      hostBtn.disabled = false;
+    }
+  }
+}
+
+async function refreshLobbyCards() {
+  buildLobbyCards();
+  renderLobbyCards();
+  await Promise.all(ELEMENTAL_LOBBIES.map(async (lobby) => {
+    lobbyStatuses.set(lobby.id, await PeerNet.probe(lobby.id));
+    renderLobbyCards();
+  }));
+}
+
+function activityStatus() {
+  const hosting = net?.isHost && currentLobby?.code;
+  return {
+    id: MY_ID,
+    name: profile.name,
+    icon: profile.icon,
+    color: myColor || profile.color || COLORS[0],
+    status: hosting ? `Hosting ${currentLobby.name}` : currentLobby?.code ? `In ${currentLobby.name}` : "Browsing",
+    lobby: currentLobby?.code || "",
+    lobbyName: currentLobby?.name || "",
+    hosting: !!hosting,
+  };
+}
+
+function updateActivityStatus(force = false) {
+  const now = Date.now();
+  if (!force && now - lastActivityUpdate < 3000) return;
+  lastActivityUpdate = now;
+  activity?.update?.();
+}
+
+function renderOnlineUsers(users = onlineUsers) {
+  onlineUsers = users.filter((u) => u.id !== MY_ID);
+  const count = $("#online-count");
+  const list = $("#online-list");
+  if (count) count.textContent = String(onlineUsers.length + 1);
+  if (!list) return;
+  list.innerHTML = "";
+  const me = activityStatus();
+  list.appendChild(onlineUserButton(me, true));
+  for (const user of onlineUsers) list.appendChild(onlineUserButton(user, false));
+}
+
+function onlineUserButton(user, isMe) {
+  const btn = document.createElement("button");
+  btn.className = "online-user";
+  btn.type = "button";
+  btn.innerHTML = `
+    <span class="online-user-avatar" style="background:${user.color || COLORS[0]}">${esc(user.icon || "●")}</span>
+    <span class="online-user-main"><span class="online-user-name">${esc(isMe ? user.name + " (you)" : user.name)}</span><span class="online-user-status">${esc(user.status || "Online")}</span></span>`;
+  btn.addEventListener("click", () => {
+    if (isMe) return;
+    if (user.hosting && user.lobby) joinLobbyCode(user.lobby);
+    else if (net.isHost && currentLobby?.code) {
+      activity.sendInvite(user.id, { code: currentLobby.code, name: currentLobby.name });
+      setStatus(`Invited ${user.name}.`);
+    }
+  });
+  return btn;
+}
+
+function startActivity() {
+  activity.on("roster", renderOnlineUsers);
+  activity.on("invite", (msg) => {
+    const lobby = msg.lobby;
+    if (!lobby?.code) return;
+    if (confirm(`${msg.from?.name || "Someone"} invited you to ${lobby.name || lobby.code}. Join now?`)) joinLobbyCode(lobby.code);
+  });
+  activity.start(activityStatus);
+  updateActivityStatus(true);
+  renderOnlineUsers([]);
 }
 
 let qr = null;
@@ -2726,47 +2958,15 @@ function render() {
   requestAnimationFrame(render);
 }
 
-// ============================================================ MENU ACTIONS ==
-$("#btn-auto").addEventListener("click", () => {
-  if (!hasLeftLobby) return;
-  net = new PeerNet();
-  wireNetEvents();
-  $("#btn-auto").disabled = true;
-  $("#auto-status").textContent = "Looking for a game on your Wi-Fi…";
-  enterDefaultLobby();
-});
-
 $("#btn-host").addEventListener("click", () => {
-  stopHostLoop();
-  net.destroy();
-  net = new PeerNet();
-  wireNetEvents();
-  autoMode = false;
-  hasLeftLobby = false;
-  keepPlayingAfterMigration = false;
-  yieldedHostForBackground = false;
-  players.clear();
-  peerMap.clear();
-  liveVideoPeers.clear();
-  usedColors.clear();
-  lobbyListKey = "";
-  lastState = [];
-  lastHostOrder = [];
-  playStarted = false;
-  setStatus("");
-  net.host();
+  hostCode($("#code-input").value || makeCode());
 });
 
 $("#btn-join").addEventListener("click", () => {
-  const code = $("#code-input").value.trim().toUpperCase();
-  if (code.length !== 4) { setStatus("Enter the 4-character code."); return; }
-  stopHostLoop();
-  net.destroy();
-  net = new PeerNet();
-  wireNetEvents();
-  playStarted = false;
-  joinCode(code);
+  joinLobbyCode($("#code-input").value);
 });
+
+$("#btn-refresh-lobbies")?.addEventListener("click", refreshLobbyCards);
 
 $("#btn-start").addEventListener("click", () => startPlaying(true));
 $("#game-select")?.addEventListener("change", (e) => setGameMode(e.target.value, true, undefined, true).catch(console.error));
@@ -2812,6 +3012,20 @@ $("#menu-version").textContent = `Version ${APP_VERSION}`;
 $("#app-version").textContent = APP_VERSION;
 $("#btn-check-update").addEventListener("click", checkForUpdates);
 $("#btn-leave-lobby").addEventListener("click", leaveLobby);
+$("#btn-settings-join")?.addEventListener("click", () => joinLobbyCode($("#settings-code-input").value));
+$("#btn-settings-host")?.addEventListener("click", () => hostCode($("#settings-code-input").value || makeCode()));
+$("#btn-share-lobby")?.addEventListener("click", async () => {
+  const code = currentLobby?.code || net.code;
+  if (!code) { $("#settings-lobby-status").textContent = "You are not in a lobby."; return; }
+  const url = `${location.origin}${location.pathname}?join=${code}`;
+  try {
+    if (navigator.share) await navigator.share({ title: "ClasslessRPG lobby", text: `Join my ClasslessRPG lobby: ${code}`, url });
+    else await navigator.clipboard.writeText(url);
+    $("#settings-lobby-status").textContent = "Lobby link shared.";
+  } catch {
+    $("#settings-lobby-status").textContent = url;
+  }
+});
 $("#btn-keep-awake").addEventListener("click", toggleKeepAwake);
 syncWakeUi();
 $("#btn-enable-notifications").addEventListener("click", enableJoinNotifications);
@@ -2838,6 +3052,11 @@ function esc(s) {
 // Kick off the render loop; draws nothing until we're playing.
 registerServiceWorker();
 requestWakeLock();
-if (autoJoinCode && autoJoinCode.length === 4) joinCode(autoJoinCode);
-else enterDefaultLobby();
+startActivity();
+refreshLobbyCards();
+const savedLobby = getStoredLobby();
+if (autoJoinCode) joinLobbyCode(autoJoinCode);
+else if (savedLobby?.code && savedLobby?.role === "host") hostCode(savedLobby.code);
+else if (savedLobby?.code) joinLobbyCode(savedLobby.code);
+else show("menu");
 render();

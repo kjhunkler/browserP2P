@@ -26,6 +26,7 @@ const CODE_LEN = 4;
 const INTERNAL = "__bp2p";
 const HEARTBEAT_MS = 1000;
 const HOST_WATCHDOG_MS = 3500;
+const ACTIVITY_ID = PREFIX + "activity";
 
 function makeCode() {
   let s = "";
@@ -51,6 +52,7 @@ class PeerNet {
     this._watchdogTimer = null;
     this._lastHostSeen = 0;
     this._hostClosedEmitted = false;
+    this.lobbyInfo = {};
   }
 
   on(event, fn) {
@@ -120,11 +122,32 @@ class PeerNet {
     if (set) for (const fn of set) fn(payload);
   }
 
+  setLobbyInfo(info) {
+    this.lobbyInfo = { ...info };
+  }
+
   /* ----- HOST ----- */
   // Registers under a fresh room code; retries if the code is already taken.
-  host() {
+  host(fixedCode = null) {
     this._closed = false;
     this.isHost = true;
+    if (fixedCode) {
+      const code = String(fixedCode).trim();
+      const peer = new Peer(PREFIX + code, { debug: 1 });
+      this.peer = peer;
+
+      peer.on("open", () => {
+        if (this._closed) return;
+        this.code = code;
+        this._startHeartbeat();
+        this._emit("ready");
+      });
+
+      this._acceptConnections(peer);
+      peer.on("error", (err) => { if (!this._closed) this._emit("error", err); });
+      return;
+    }
+
     const tryCode = (attemptsLeft) => {
       if (this._closed) return;
       const code = makeCode();
@@ -162,6 +185,13 @@ class PeerNet {
         this._acceptVoiceConnection(conn);
         return;
       }
+      if (conn.label === "probe") {
+        conn.on("open", () => {
+          if (!this._closed && conn.open) conn.send({ t: INTERNAL, kind: "lobby-info", info: this.lobbyInfo || {}, code: this.code });
+          setTimeout(() => conn.close?.(), 150);
+        });
+        return;
+      }
       conn.on("open", () => {
         if (this._closed) return;
         this.conns.set(conn.peer, conn);
@@ -175,6 +205,32 @@ class PeerNet {
       });
     });
     this._acceptMediaCalls(peer);
+  }
+
+  static probe(code, timeoutMs = 1800) {
+    return new Promise((resolve) => {
+      const peer = new Peer({ debug: 0 });
+      let done = false;
+      const finish = (result) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        try { conn?.close?.(); } catch {}
+        try { peer.destroy(); } catch {}
+        resolve(result);
+      };
+      let conn = null;
+      const timer = setTimeout(() => finish({ online: false }), timeoutMs);
+      peer.on("open", () => {
+        conn = peer.connect(PREFIX + code, { label: "probe", reliable: true });
+        conn.on("open", () => {});
+        conn.on("data", (data) => {
+          if (data?.t === INTERNAL && data.kind === "lobby-info") finish({ online: true, info: data.info || {}, code: data.code || code });
+        });
+        conn.on("close", () => finish({ online: false }));
+      });
+      peer.on("error", () => finish({ online: false }));
+    });
   }
 
   _acceptVoiceConnection(conn) {
@@ -416,5 +472,170 @@ class PeerNet {
     this.mediaCalls.clear();
     this.hostConn = null;
     this.hostVoiceConn = null;
+  }
+}
+
+class PeerActivity {
+  constructor() {
+    this.peer = null;
+    this.hostConn = null;
+    this.conns = new Map();
+    this.users = new Map();
+    this._handlers = new Map();
+    this._closed = false;
+    this._isHost = false;
+    this._statusFn = () => ({});
+    this._tick = null;
+  }
+
+  on(event, fn) {
+    if (!this._handlers.has(event)) this._handlers.set(event, new Set());
+    this._handlers.get(event).add(fn);
+    return this;
+  }
+
+  _emit(event, payload) {
+    const set = this._handlers.get(event);
+    if (set) for (const fn of set) fn(payload);
+  }
+
+  start(statusFn) {
+    this._closed = false;
+    this._statusFn = statusFn || this._statusFn;
+    this._connectOrHost();
+    this._tick = setInterval(() => this.update(), 10000);
+  }
+
+  _payload() {
+    return { t: 'activity', kind: 'update', user: this._statusFn() };
+  }
+
+  _connectOrHost() {
+    const peer = new Peer({ debug: 0 });
+    this.peer = peer;
+    let settled = false;
+    peer.on('open', () => {
+      if (this._closed) return;
+      const conn = peer.connect(ACTIVITY_ID, { label: 'activity', reliable: true });
+      this.hostConn = conn;
+      const timer = setTimeout(() => {
+        if (settled || this._closed) return;
+        settled = true;
+        peer.destroy();
+        this._becomeHost();
+      }, 1800);
+      conn.on('open', () => {
+        if (this._closed) return;
+        settled = true;
+        clearTimeout(timer);
+        conn.send(this._payload());
+        this._emit('roster', [this._statusFn()]);
+      });
+      conn.on('data', (msg) => this._handleClientMsg(msg));
+      conn.on('close', () => this._retry());
+    });
+    peer.on('error', (err) => {
+      if (this._closed) return;
+      if (err.type === 'peer-unavailable' && !settled) {
+        settled = true;
+        peer.destroy();
+        this._becomeHost();
+      }
+    });
+  }
+
+  _becomeHost() {
+    if (this._closed) return;
+    this._isHost = true;
+    const peer = new Peer(ACTIVITY_ID, { debug: 0 });
+    this.peer = peer;
+    peer.on('open', () => this.update());
+    peer.on('connection', (conn) => {
+      if (conn.label !== 'activity') return;
+      conn.on('open', () => this.conns.set(conn.peer, conn));
+      conn.on('data', (msg) => this._handleHostMsg(conn.peer, msg));
+      conn.on('close', () => {
+        this.conns.delete(conn.peer);
+        for (const [id, user] of this.users) if (user.peerId === conn.peer) this.users.delete(id);
+        this._broadcastRoster();
+      });
+    });
+    peer.on('error', (err) => {
+      if (this._closed) return;
+      if (err.type === 'unavailable-id') this._retry();
+    });
+  }
+
+  _retry() {
+    if (this._closed) return;
+    try { this.peer?.destroy(); } catch {}
+    this.peer = null;
+    this.hostConn = null;
+    this._isHost = false;
+    setTimeout(() => { if (!this._closed) this._connectOrHost(); }, 1200 + Math.random() * 1000);
+  }
+
+  _handleHostMsg(peerId, msg) {
+    if (msg?.t !== 'activity') return;
+    if (msg.kind === 'update' && msg.user?.id) {
+      this.users.set(msg.user.id, { ...msg.user, peerId, updated: Date.now() });
+      this._broadcastRoster();
+    } else if (msg.kind === 'invite' && msg.to) {
+      this._routeInvite(msg);
+    }
+  }
+
+  _handleClientMsg(msg) {
+    if (msg?.t !== 'activity') return;
+    if (msg.kind === 'roster') {
+      this.users = new Map((msg.users || []).map((u) => [u.id, u]));
+      this._emit('roster', Array.from(this.users.values()));
+    } else if (msg.kind === 'invite') {
+      this._emit('invite', msg);
+    }
+  }
+
+  _broadcastRoster() {
+    const cutoff = Date.now() - 30000;
+    for (const [id, user] of this.users) if ((user.updated || 0) < cutoff) this.users.delete(id);
+    const users = Array.from(this.users.values()).map(({ peerId, ...user }) => user);
+    this._emit('roster', users);
+    const msg = { t: 'activity', kind: 'roster', users };
+    for (const conn of this.conns.values()) if (conn.open) conn.send(msg);
+  }
+
+  _routeInvite(msg) {
+    if (msg.to === this._statusFn().id) {
+      this._emit('invite', msg);
+      return;
+    }
+    const target = this.users.get(msg.to);
+    const conn = target && this.conns.get(target.peerId);
+    if (conn?.open) conn.send(msg);
+  }
+
+  update() {
+    if (this._closed) return;
+    const payload = this._payload();
+    if (this._isHost) {
+      if (payload.user?.id) this.users.set(payload.user.id, { ...payload.user, updated: Date.now() });
+      this._broadcastRoster();
+    } else if (this.hostConn?.open) {
+      this.hostConn.send(payload);
+    }
+  }
+
+  sendInvite(to, lobby) {
+    const msg = { t: 'activity', kind: 'invite', to, from: this._statusFn(), lobby };
+    if (this._isHost) this._routeInvite(msg);
+    else if (this.hostConn?.open) this.hostConn.send(msg);
+  }
+
+  destroy() {
+    this._closed = true;
+    clearInterval(this._tick);
+    for (const conn of this.conns.values()) conn.close?.();
+    this.hostConn?.close?.();
+    this.peer?.destroy?.();
   }
 }

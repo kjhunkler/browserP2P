@@ -1,7 +1,7 @@
 {
-  "name": "browserP2P",
-  "short_name": "browserP2P",
-  "description": "Phone-to-phone over your Wi-Fi.",
+  "name": "ClasslessRPG",
+  "short_name": "ClasslessRPG",
+  "description": "Peer-to-peer tabletop lobbies.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
