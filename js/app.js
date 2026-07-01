@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.6.2";
+const APP_VERSION = "2.6.3";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
@@ -376,6 +376,19 @@ function addPlayer(id, name, peerId, icon, preferredColor) {
     profiles.set(id, { name: p.name, color: p.color, icon: p.icon });
     return p;
   }
+  let color;
+  if (preferredColor && !usedColors.has(preferredColor)) {
+    color = preferredColor;
+    usedColors.add(color);
+  } else {
+    color = pickColor();
+  }
+  const p = { id, name, color, icon: icon || DEFAULT_ICON, x: 0.5, y: 0.5, connected: true };
+  players.set(id, p);
+  if (peerId) peerMap.set(peerId, id);
+  profiles.set(id, { name: p.name, color: p.color, icon: p.icon });
+  return p;
+}
 
 function lobbyDisplayName(code) {
   return ELEMENTAL_LOBBIES.find((l) => l.id === code)?.name || code || "Custom";
@@ -425,19 +438,6 @@ function updateHostedLobbyInfo() {
 
 function getStoredLobby() {
   try { return JSON.parse(localStorage.getItem(CURRENT_LOBBY_KEY) || "null"); } catch { return null; }
-}
-  let color;
-  if (preferredColor && !usedColors.has(preferredColor)) {
-    color = preferredColor;
-    usedColors.add(color);
-  } else {
-    color = pickColor();
-  }
-  const p = { id, name, color, icon: icon || DEFAULT_ICON, x: 0.5, y: 0.5, connected: true };
-  players.set(id, p);
-  if (peerId) peerMap.set(peerId, id);
-  profiles.set(id, { name: p.name, color: p.color, icon: p.icon });
-  return p;
 }
 
 // ============================================================ NET WIRING ====
