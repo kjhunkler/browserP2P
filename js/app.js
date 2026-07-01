@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.5.14";
+const APP_VERSION = "2.5.16";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
@@ -742,12 +742,14 @@ function startHostLoop() {
       yieldHostForBackground("timer throttling");
       return;
     }
+    ensureDndPlayerStats();
     const connectedPlayers = [...players.values()].filter((p) => p.connected !== false);
     const list = connectedPlayers.map(p => ({
       id: p.id, name: p.name, color: p.color, icon: p.icon, x: p.x, y: p.y,
     }));
     const hostOrder = connectedPlayers.map((p) => p.id);
     net.broadcast({ t: "state", players: list, hostOrder });
+    net.broadcast({ t: "dnd-state", state: dndSharedState });
     lastState = list;
     lastHostOrder = hostOrder;
   }, 1000 / TICK_HZ);
@@ -843,19 +845,20 @@ const DND_LIBRARY_KEY = "bp2p-dnd-assets";
 const DND_GRID_FT = 5;
 const DND_CELL_PX = 48;
 const DND_ZOOM_KEY = "bp2p-dnd-zoom";
+const DND_ABILITIES = ["str", "dex", "con", "int", "wis", "cha"];
 const DND_ASSETS = [
-  { id: "hero", name: "Hero", icon: "🧙", color: "#4dd2ff", w: 1, h: 1 },
-  { id: "fighter", name: "Fighter", icon: "🛡️", color: "#7cfc9b", w: 1, h: 1 },
-  { id: "rogue", name: "Rogue", icon: "🗡️", color: "#ffd24d", w: 1, h: 1 },
-  { id: "goblin", name: "Goblin", icon: "👺", color: "#7CFC9B", w: 1, h: 1 },
-  { id: "orc", name: "Orc", icon: "🪓", color: "#22cc88", w: 1, h: 1 },
-  { id: "skeleton", name: "Skeleton", icon: "💀", color: "#c8c8d8", w: 1, h: 1 },
-  { id: "dragon", name: "Dragon Boss", icon: "🐉", color: "#ff5d5d", w: 3, h: 3 },
-  { id: "lich", name: "Lich Boss", icon: "🧟", color: "#aa44ff", w: 2, h: 2 },
-  { id: "chest", name: "Treasure Chest", icon: "🧰", color: "#ffbb33", w: 1, h: 1 },
-  { id: "wall", name: "Wall", icon: "🧱", color: "#77778d", w: 2, h: 1 },
-  { id: "tree", name: "Tree", icon: "🌲", color: "#22aa66", w: 1, h: 1 },
-  { id: "rock", name: "Rock", icon: "🪨", color: "#9090a8", w: 1, h: 1 },
+  { id: "hero", name: "Hero", icon: "🧙", color: "#4dd2ff", w: 1, h: 1, role: "player", statPreset: "caster" },
+  { id: "fighter", name: "Fighter", icon: "🛡️", color: "#7cfc9b", w: 1, h: 1, role: "player", statPreset: "fighter" },
+  { id: "rogue", name: "Rogue", icon: "🗡️", color: "#ffd24d", w: 1, h: 1, role: "player", statPreset: "rogue" },
+  { id: "goblin", name: "Goblin", icon: "👺", color: "#7CFC9B", w: 1, h: 1, role: "enemy", statPreset: "goblin" },
+  { id: "orc", name: "Orc", icon: "🪓", color: "#22cc88", w: 1, h: 1, role: "enemy", statPreset: "orc" },
+  { id: "skeleton", name: "Skeleton", icon: "💀", color: "#c8c8d8", w: 1, h: 1, role: "enemy", statPreset: "skeleton" },
+  { id: "dragon", name: "Dragon Boss", icon: "🐉", color: "#ff5d5d", w: 3, h: 3, role: "boss", statPreset: "dragon" },
+  { id: "lich", name: "Lich Boss", icon: "🧟", color: "#aa44ff", w: 2, h: 2, role: "boss", statPreset: "lich" },
+  { id: "chest", name: "Treasure Chest", icon: "🧰", color: "#ffbb33", w: 1, h: 1, role: "object" },
+  { id: "wall", name: "Wall", icon: "🧱", color: "#77778d", w: 2, h: 1, role: "object" },
+  { id: "tree", name: "Tree", icon: "🌲", color: "#22aa66", w: 1, h: 1, role: "object" },
+  { id: "rock", name: "Rock", icon: "🪨", color: "#9090a8", w: 1, h: 1, role: "object" },
 ];
 const DND_SCENES = [
   { id: "blank", name: "Blank Board", bg: "#182033", board: { cols: 24, rows: 18 }, assets: [] },
@@ -874,7 +877,7 @@ const DND_SCENES = [
 ];
 
 function defaultDndState() {
-  return { grid: false, board: { cols: 24, rows: 18 }, bg: "#182033", assets: [] };
+  return { grid: false, board: { cols: 24, rows: 18 }, bg: "#182033", assets: [], playerStats: {} };
 }
 
 function loadDndState() {
@@ -902,6 +905,129 @@ let dndDrag = null;
 let dndHoverName = "";
 let dndZoom = Math.max(0.55, Math.min(2.25, Number(localStorage.getItem(DND_ZOOM_KEY) || 1)));
 let activeDiceRoll = null;
+let dndPointerDown = null;
+
+function abilityMod(score) {
+  return Math.floor(((Number(score) || 10) - 10) / 2);
+}
+
+function modText(score) {
+  const mod = abilityMod(score);
+  return mod >= 0 ? `+${mod}` : String(mod);
+}
+
+function varyStat(base, amount = 2) {
+  return Math.max(3, Math.min(20, base + Math.floor(Math.random() * (amount * 2 + 1)) - amount));
+}
+
+function statBlock(preset = "commoner") {
+  const templates = {
+    commoner: { level: 1, ac: 10, speed: 30, hp: 8, mana: 0, abilities: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 } },
+    fighter: { level: 1, ac: 16, speed: 30, hp: 14, mana: 0, abilities: { str: 15, dex: 12, con: 14, int: 10, wis: 11, cha: 10 } },
+    rogue: { level: 1, ac: 14, speed: 30, hp: 10, mana: 0, abilities: { str: 10, dex: 16, con: 12, int: 12, wis: 11, cha: 13 } },
+    caster: { level: 1, ac: 12, speed: 30, hp: 8, mana: 10, abilities: { str: 8, dex: 13, con: 12, int: 16, wis: 12, cha: 11 } },
+    goblin: { level: 1, ac: 15, speed: 30, hp: 7, mana: 0, abilities: { str: 8, dex: 14, con: 10, int: 10, wis: 8, cha: 8 } },
+    orc: { level: 2, ac: 13, speed: 30, hp: 15, mana: 0, abilities: { str: 16, dex: 12, con: 16, int: 7, wis: 11, cha: 10 } },
+    skeleton: { level: 1, ac: 13, speed: 30, hp: 13, mana: 0, abilities: { str: 10, dex: 14, con: 15, int: 6, wis: 8, cha: 5 } },
+    dragon: { level: 10, ac: 18, speed: 40, hp: 178, mana: 30, abilities: { str: 23, dex: 10, con: 21, int: 14, wis: 13, cha: 17 } },
+    lich: { level: 12, ac: 17, speed: 30, hp: 135, mana: 120, abilities: { str: 11, dex: 16, con: 16, int: 20, wis: 14, cha: 16 } },
+  };
+  const base = templates[preset] || templates.commoner;
+  const abilities = {};
+  for (const key of DND_ABILITIES) abilities[key] = preset === "dragon" || preset === "lich" ? base.abilities[key] : varyStat(base.abilities[key]);
+  const hpMax = Math.max(1, base.hp + abilityMod(abilities.con));
+  const manaMax = Math.max(0, base.mana + Math.max(0, abilityMod(abilities.int)) * 2);
+  return {
+    level: base.level,
+    ac: base.ac,
+    speed: base.speed,
+    hp: hpMax,
+    maxHp: hpMax,
+    mana: manaMax,
+    maxMana: manaMax,
+    abilities,
+  };
+}
+
+function dndStatsForPlayer(player) {
+  const seed = player.id || MY_ID;
+  const existing = dndSharedState.playerStats?.[seed];
+  if (existing) return existing;
+  const presets = ["fighter", "rogue", "caster"];
+  const preset = presets[Math.abs(seed.split("").reduce((sum, ch) => sum + ch.charCodeAt(0), 0)) % presets.length];
+  return statBlock(preset);
+}
+
+function ensureDndPlayerStats() {
+  const list = net.isHost ? [...players.values()] : lastState;
+  if (!dndSharedState.playerStats) dndSharedState.playerStats = {};
+  let changed = false;
+  for (const p of list) {
+    if (!p?.id || dndSharedState.playerStats[p.id]) continue;
+    dndSharedState.playerStats[p.id] = dndStatsForPlayer(p);
+    changed = true;
+  }
+  if (changed) saveDndState();
+}
+
+function ensureAssetStats(asset) {
+  if (!asset || asset.role === "object") return asset;
+  if (!asset.stats) asset.stats = statBlock(asset.statPreset || (asset.role === "boss" ? "dragon" : asset.role === "enemy" ? "goblin" : "commoner"));
+  return asset;
+}
+
+function statPercent(current, max) {
+  if (!max || max <= 0) return 0;
+  return Math.max(0, Math.min(1, current / max));
+}
+
+function drawStatBars(x, y, w, stats) {
+  if (!stats) return;
+  const barW = Math.max(34, Math.min(110, w));
+  const left = x + (w - barW) / 2;
+  let top = y - 12;
+  drawBar(left, top, barW, 5, statPercent(stats.hp, stats.maxHp), "#ff5d5d");
+  if (stats.maxMana > 0) {
+    top += 7;
+    drawBar(left, top, barW, 5, statPercent(stats.mana, stats.maxMana), "#4dd2ff");
+  }
+}
+
+function drawBar(x, y, w, h, pct, color) {
+  ctx.fillStyle = "rgba(0,0,0,0.7)";
+  roundRect(ctx, x, y, w, h, h / 2);
+  ctx.fill();
+  ctx.fillStyle = color;
+  roundRect(ctx, x, y, w * pct, h, h / 2);
+  ctx.fill();
+}
+
+function showDndStats(entity) {
+  const card = $("#dnd-stats-card");
+  if (!card || !entity) return;
+  const stats = entity.stats || dndStatsForPlayer(entity);
+  $("#dnd-stats-name").textContent = entity.name || "Unknown";
+  $("#dnd-stats-type").textContent = `${entity.kind || entity.role || "entity"} • Level ${stats.level || 1} • AC ${stats.ac || 10}`;
+  $("#dnd-stats-bars").innerHTML = `
+    <div class="dnd-stat-bar-row"><span>HP</span><div class="dnd-stat-bar"><i style="width:${Math.round(statPercent(stats.hp, stats.maxHp) * 100)}%;background:#ff5d5d"></i></div><b>${stats.hp}/${stats.maxHp}</b></div>
+    ${stats.maxMana > 0 ? `<div class="dnd-stat-bar-row"><span>Mana</span><div class="dnd-stat-bar"><i style="width:${Math.round(statPercent(stats.mana, stats.maxMana) * 100)}%;background:#4dd2ff"></i></div><b>${stats.mana}/${stats.maxMana}</b></div>` : ""}`;
+  $("#dnd-stats-abilities").innerHTML = DND_ABILITIES.map((key) => `
+    <div class="dnd-ability"><span>${key.toUpperCase()}</span><strong>${stats.abilities?.[key] ?? 10}</strong><em>${modText(stats.abilities?.[key] ?? 10)}</em></div>`).join("");
+  $("#dnd-stats-details").textContent = `Speed ${stats.speed || 30} ft${entity.ownerId ? " • Owner token" : ""}`;
+  card.classList.remove("hidden");
+}
+
+function hideDndStats() {
+  $("#dnd-stats-card")?.classList.add("hidden");
+}
+
+function playerAtPoint(norm) {
+  for (let i = lastState.length - 1; i >= 0; i--) {
+    const p = lastState[i];
+    if (Math.hypot(norm.x - p.x, norm.y - p.y) <= 0.035) return p;
+  }
+  return null;
+}
 
 function dndAssetCatalog() {
   return [...DND_ASSETS, ...dndLocalLibrary];
@@ -916,7 +1042,22 @@ function dndBoardMetrics(rect) {
   const cell = DND_CELL_PX * dndZoom;
   const w = board.cols * cell;
   const h = board.rows * cell;
-  return { board, cell, w, h, ox: (rect.width - w) / 2, oy: (rect.height - h) / 2 };
+  return { board, cell, w, h, ox: 0, oy: 0 };
+}
+
+function syncDndCanvasStyle() {
+  if (selectedGame !== "free-play") {
+    canvas.style.width = "";
+    canvas.style.height = "";
+    screens.play.classList.remove("dnd-board-active");
+    return;
+  }
+  const board = dndSharedState.board || defaultDndState().board;
+  const w = Math.round(board.cols * DND_CELL_PX * dndZoom);
+  const h = Math.round(board.rows * DND_CELL_PX * dndZoom);
+  canvas.style.width = `${w}px`;
+  canvas.style.height = `${h}px`;
+  screens.play.classList.add("dnd-board-active");
 }
 
 function pointerToBoard(e) {
@@ -947,6 +1088,7 @@ function replaceDndState(state) {
   dndSharedState = { ...defaultDndState(), ...(state || {}) };
   dndSelectedId = dndSharedState.assets.some((a) => a.id === dndSelectedId) ? dndSelectedId : null;
   saveDndState();
+  syncDndCanvasStyle();
   syncDndUi();
 }
 
@@ -955,7 +1097,7 @@ function applyDndAction(action, actorId = MY_ID, broadcast = true) {
   if (action.type === "state") {
     replaceDndState(action.state);
   } else if (action.type === "add") {
-    dndSharedState.assets.push({ ...action.asset, ownerId: actorId });
+    dndSharedState.assets.push(ensureAssetStats({ ...action.asset, ownerId: actorId }));
     dndSelectedId = action.asset.id;
   } else if (action.type === "move") {
     const asset = dndSharedState.assets.find((a) => a.id === action.id);
@@ -971,6 +1113,7 @@ function applyDndAction(action, actorId = MY_ID, broadcast = true) {
     dndSharedState.board = action.board;
   }
   saveDndState();
+  syncDndCanvasStyle();
   syncDndUi();
   if (broadcast && net.isHost) net.broadcast({ t: "dnd-state", state: dndSharedState });
 }
@@ -979,9 +1122,9 @@ function sceneToState(scene) {
   const catalog = dndAssetCatalog();
   const assets = scene.assets.map(([assetId, name, x, y, w, h], index) => {
     const base = catalog.find((a) => a.id === assetId) || DND_ASSETS[0];
-    return { ...base, id: `scene-${scene.id}-${index}-${Date.now()}`, name, x, y, w, h };
+    return ensureAssetStats({ ...base, id: `scene-${scene.id}-${index}-${Date.now()}`, name, x, y, w, h });
   });
-  return { grid: true, board: scene.board, bg: scene.bg, assets };
+  return { ...defaultDndState(), grid: true, board: scene.board, bg: scene.bg, assets, playerStats: dndSharedState.playerStats || {} };
 }
 
 function setDndScene(sceneId) {
@@ -1003,6 +1146,7 @@ function addSelectedDndAsset() {
     w: base.w || 1,
     h: base.h || 1,
   };
+  ensureAssetStats(asset);
   sendDndAction({ type: "add", asset });
 }
 
@@ -1011,7 +1155,7 @@ function createCustomDndAsset() {
   if (!name) return;
   const icon = prompt("Emoji or short label", "⭐")?.trim() || "⭐";
   const color = prompt("Color", "#4dd2ff")?.trim() || "#4dd2ff";
-  const asset = { id: `local-${Date.now()}`, name, icon: icon.slice(0, 4), color, w: 1, h: 1, local: true };
+  const asset = { id: `local-${Date.now()}`, name, icon: icon.slice(0, 4), color, w: 1, h: 1, role: "object", local: true };
   dndLocalLibrary.push(asset);
   saveDndLibrary();
   syncDndUi();
@@ -1022,7 +1166,7 @@ function saveSelectedAssetToLibrary() {
   if (!asset) return;
   const name = prompt("Save asset as", asset.name || "Asset")?.trim();
   if (!name) return;
-  const saved = { id: `local-${Date.now()}`, name, icon: asset.icon, color: asset.color, w: asset.w, h: asset.h, local: true };
+  const saved = { id: `local-${Date.now()}`, name, icon: asset.icon, color: asset.color, w: asset.w, h: asset.h, role: asset.role || "object", statPreset: asset.statPreset, stats: asset.stats, local: true };
   dndLocalLibrary.push(saved);
   saveDndLibrary();
   syncDndUi();
@@ -1047,6 +1191,7 @@ function setDndBoardSize() {
 function setDndZoom(next) {
   dndZoom = Math.max(0.55, Math.min(2.25, next));
   localStorage.setItem(DND_ZOOM_KEY, String(dndZoom));
+  syncDndCanvasStyle();
 }
 
 function syncDndUi() {
@@ -1264,6 +1409,7 @@ function renderDndBoard(rect) {
 }
 
 function drawDndAsset(asset, m) {
+  ensureAssetStats(asset);
   const x = m.ox + asset.x * m.cell;
   const y = m.oy + asset.y * m.cell;
   const w = asset.w * m.cell;
@@ -1283,6 +1429,7 @@ function drawDndAsset(asset, m) {
   ctx.textBaseline = "middle";
   ctx.fillStyle = "#fff";
   ctx.fillText(asset.icon || "●", x + w / 2, y + h / 2);
+  drawStatBars(x, y, w, asset.stats);
   ctx.restore();
 }
 
@@ -1614,6 +1761,7 @@ function enterFreePlayMode() {
   dragging = false;
   setDrawMode(false);
   syncDndUi();
+  syncDndCanvasStyle();
   syncCanvasSize();
   renderFreePlayFrame();
 }
@@ -2243,6 +2391,7 @@ function startPlaying(broadcast = true) {
   setRestorePlay(true);
   rememberGamePlayed(selectedGame);
   show("play");
+  syncDndCanvasStyle();
   if (broadcast && net.isHost) net.broadcast({ t: "play" });
 }
 
@@ -2421,6 +2570,7 @@ function onDown(e) {
   if (selectedGame !== "free-play") return;
   // Don't drag when a sheet or chat panel is open.
   if (profileOpen || chatOpen) return;
+  if (e.touches && e.touches.length > 1) return;
   const boardPoint = pointerToBoard(e);
   const asset = dndAssetAt(boardPoint);
   if (asset && !drawMode) {
@@ -2429,8 +2579,15 @@ function onDown(e) {
     const index = dndSharedState.assets.indexOf(asset);
     dndSharedState.assets.splice(index, 1);
     dndSharedState.assets.push(asset);
-    dndDrag = { id: asset.id, dx: boardPoint.x - asset.x, dy: boardPoint.y - asset.y };
+    dndDrag = { id: asset.id, dx: boardPoint.x - asset.x, dy: boardPoint.y - asset.y, moved: false };
+    dndPointerDown = { kind: "asset", entity: asset, x: boardPoint.x, y: boardPoint.y };
     sendDndAction({ type: "select", id: asset.id });
+    return;
+  }
+  const player = playerAtPoint(pointerToNorm(e));
+  if (player && !drawMode) {
+    e.preventDefault();
+    dndPointerDown = { kind: "player", entity: { ...player, kind: "player", stats: dndStatsForPlayer(player) }, x: boardPoint.x, y: boardPoint.y };
     return;
   }
   if (drawMode) {
@@ -2458,12 +2615,14 @@ function onDown(e) {
 }
 function onMove(e) {
   if (selectedGame !== "free-play") return;
+  if (e.touches && e.touches.length > 1) return;
   if (dndDrag) {
     e.preventDefault();
     const point = pointerToBoard(e);
     const asset = dndSharedState.assets.find((a) => a.id === dndDrag.id);
     const board = dndSharedState.board || defaultDndState().board;
     if (asset) {
+      if (Math.hypot(point.x - (asset.x + dndDrag.dx), point.y - (asset.y + dndDrag.dy)) > 0.08) dndDrag.moved = true;
       asset.x = Math.max(0, Math.min(board.cols - asset.w, Math.round((point.x - dndDrag.dx) * 2) / 2));
       asset.y = Math.max(0, Math.min(board.rows - asset.h, Math.round((point.y - dndDrag.dy) * 2) / 2));
     }
@@ -2492,8 +2651,12 @@ function onUp() {
   if (dndDrag) {
     const asset = dndSharedState.assets.find((a) => a.id === dndDrag.id);
     if (asset) sendDndAction({ type: "move", id: asset.id, x: asset.x, y: asset.y });
+    if (!dndDrag.moved && asset) showDndStats({ ...asset, kind: asset.role || "asset" });
+  } else if (dndPointerDown?.entity) {
+    showDndStats(dndPointerDown.entity);
   }
   dndDrag = null;
+  dndPointerDown = null;
   if (drawing && currentStroke) addDrawingStroke(currentStroke);
   drawing = false;
   currentStroke = null;
@@ -2551,6 +2714,7 @@ function renderFreePlayFrame() {
     ctx.textBaseline  = "alphabetic";
     ctx.fillStyle     = "rgba(255,255,255,0.85)";
     ctx.fillText(hostCrown(p.id) + p.name, x, y - 32);
+    drawStatBars(x - 24, y + 28, 48, dndStatsForPlayer(p));
   }
   renderDiceOverlay(rect);
 }
@@ -2627,6 +2791,7 @@ $("#btn-dnd-board")?.addEventListener("click", setDndBoardSize);
 $("#btn-dnd-zoom-out")?.addEventListener("click", () => setDndZoom(dndZoom - 0.15));
 $("#btn-dnd-zoom-in")?.addEventListener("click", () => setDndZoom(dndZoom + 0.15));
 $("#btn-dnd-roll")?.addEventListener("click", requestDiceRoll);
+$("#btn-dnd-stats-close")?.addEventListener("click", hideDndStats);
 const startupGame = rememberedGameOrDefault() || $("#game-select")?.value || "free-play";
 setGameMode(startupGame).catch(console.error);
 syncDrawToolUi();

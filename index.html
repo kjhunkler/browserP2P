@@ -117,6 +117,18 @@
         </div>
       <div id="video-tray" class="video-tray" aria-live="polite"></div>
       <canvas id="stage"></canvas>
+      <div id="dnd-stats-card" class="dnd-stats-card hidden" aria-live="polite">
+        <div class="dnd-stats-header">
+          <div>
+            <div id="dnd-stats-name" class="dnd-stats-name"></div>
+            <div id="dnd-stats-type" class="dnd-stats-type"></div>
+          </div>
+          <button id="btn-dnd-stats-close" class="close-btn" aria-label="Close stats">✕</button>
+        </div>
+        <div id="dnd-stats-bars" class="dnd-stats-bars"></div>
+        <div id="dnd-stats-abilities" class="dnd-stats-abilities"></div>
+        <div id="dnd-stats-details" class="dnd-stats-details"></div>
+      </div>
     </section>
 
   </div>
@@ -166,7 +178,7 @@
       <div class="field-group app-update-group">
           <label>App</label>
           <div class="version-row">
-              <span>Version <strong id="app-version">2.5.14</strong></span>
+              <span>Version <strong id="app-version">2.5.16</strong></span>
               <button id="btn-check-update" class="btn btn-small" type="button">Check for updates</button>
           </div>
           <p id="update-status" class="status"></p>

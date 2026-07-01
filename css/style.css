@@ -145,7 +145,7 @@ input, textarea, select {
 }
 
 /* ===== Play screen ===== */
-#screen-play { padding: 0; justify-content: flex-start; position: relative; gap:0; }
+#screen-play { padding: 0; justify-content: flex-start; align-items: flex-start; position: relative; gap:0; overflow: auto; }
 #game-select > option {color:black;}
 #stage {
     width: 100%;
@@ -153,6 +153,13 @@ input, textarea, select {
     min-height: 0;
     touch-action: none;
     background: radial-gradient(circle at 50% 40%, #1e1e34, #0d0d18);
+}
+
+#screen-play.dnd-board-active #stage {
+    flex: 0 0 auto;
+    max-width: none;
+    max-height: none;
+    touch-action: pan-x pan-y pinch-zoom;
 }
 
 /* Play menu bar */
@@ -391,6 +398,103 @@ input, textarea, select {
 }
 
 .dnd-select option { color: #111; }
+
+.dnd-stats-card {
+  position: fixed;
+  right: 16px;
+  bottom: max(20px, env(safe-area-inset-bottom));
+  z-index: 45;
+  width: min(340px, calc(100vw - 32px));
+  padding: 14px;
+  border: 1px solid #2c2c44;
+  border-radius: 18px;
+  background: rgba(18, 18, 31, 0.96);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(8px);
+  text-align: left;
+}
+
+.dnd-stats-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.dnd-stats-name {
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.dnd-stats-type,
+.dnd-stats-details {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.dnd-stats-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.dnd-stat-bar-row {
+  display: grid;
+  grid-template-columns: 42px 1fr 58px;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.dnd-stat-bar {
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.dnd-stat-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.dnd-stats-abilities {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.dnd-ability {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 6px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.dnd-ability span {
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.dnd-ability strong {
+  font-size: 1rem;
+}
+
+.dnd-ability em {
+  color: var(--accent2);
+  font-size: 0.74rem;
+  font-style: normal;
+  font-weight: 800;
+}
 
 .video-tray {
   position: fixed;
