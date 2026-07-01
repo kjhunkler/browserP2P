@@ -7,6 +7,7 @@
   const GRID_W = 36;
   const GRID_H = 24;
   const SNAPSHOT_HZ = 15;
+  const FULL_SNAPSHOT_INTERVAL_MS = 5000;
   const ROUND_MS = 120000;
   const PLAYER_R = 0.024;
   const BASE_SPEED = 0.28;
@@ -20,6 +21,8 @@
     let rafId = 0;
     let lastTs = 0;
     let lastSnapshotAt = 0;
+    let lastFullSnapshotAt = 0;
+    let forceFullSnapshot = true;
     let lastCssWidth = 0;
     let lastCssHeight = 0;
     let activePointerId = null;
@@ -40,6 +43,7 @@
       players: {},
       scores: {},
     };
+    const dirtyPaint = new Set();
 
     function now() { return performance.now(); }
     function isHost() { return !!host.isHost(); }
@@ -128,7 +132,7 @@
           if (xx < 0 || yy < 0 || xx >= GRID_W || yy >= GRID_H) continue;
           if (Math.hypot(xx - tx, yy - ty) > radius + 0.25) continue;
           const k = key(xx, yy);
-          if (state.grid[k] !== id) { state.grid[k] = id; changed++; }
+          if (state.grid[k] !== id) { state.grid[k] = id; dirtyPaint.add(k); changed++; }
         }
       }
       if (changed) state.scores[id] = (state.scores[id] || 0) + changed;
@@ -141,6 +145,8 @@
       state.over = false;
       state.round++;
       state.grid = emptyGrid();
+      dirtyPaint.clear();
+      forceFullSnapshot = true;
       state.scores = {};
       for (const p of Object.values(state.players)) {
         p.x = rand(0.12, 0.88);
@@ -160,6 +166,8 @@
       state.round = 1;
       state.over = false;
       state.grid = emptyGrid();
+      dirtyPaint.clear();
+      forceFullSnapshot = true;
       state.players = {};
       state.scores = {};
       syncPlayerList();
@@ -244,17 +252,24 @@
       updatePlayers(dt);
     }
 
-    function makeSnapshot() {
-      return {
+    function makeSnapshot(full = false) {
+      full = !!full;
+      const gridDelta = full ? null : [...dirtyPaint].map((i) => [i, state.grid[i] || null]);
+      const snapshot = {
+        full,
         startedAt: state.startedAt,
         now: state.now,
         round: state.round,
         over: state.over,
-        grid: state.grid,
+        grid: full ? state.grid.slice() : undefined,
+        gridDelta,
         players: state.players,
         scores: state.scores,
         events: events.slice(-18),
       };
+      dirtyPaint.clear();
+      if (full) forceFullSnapshot = false;
+      return snapshot;
     }
 
     function applySnapshot(s) {
@@ -263,13 +278,19 @@
       state.now = s.now || Date.now();
       state.round = s.round || 1;
       state.over = !!s.over;
-      state.grid = Array.isArray(s.grid) ? s.grid.slice() : emptyGrid();
+      if (s.full || Array.isArray(s.grid)) state.grid = Array.isArray(s.grid) ? s.grid.slice() : emptyGrid();
+      if (Array.isArray(s.gridDelta)) {
+        if (!Array.isArray(state.grid) || state.grid.length !== GRID_W * GRID_H) state.grid = emptyGrid();
+        for (const [i, owner] of s.gridDelta) {
+          if (i >= 0 && i < state.grid.length) state.grid[i] = owner || null;
+        }
+      }
       state.players = { ...(s.players || {}) };
       state.scores = { ...(s.scores || {}) };
       applyEvents(s.events);
     }
 
-    function currentSnapshot() { return makeSnapshot(); }
+    function currentSnapshot() { return makeSnapshot(true); }
 
     function resize() {
       const box = canvas.getBoundingClientRect();
@@ -497,7 +518,9 @@
         updateHost(dt);
         if (ts - lastSnapshotAt >= 1000 / SNAPSHOT_HZ) {
           lastSnapshotAt = ts;
-          host.broadcastState(makeSnapshot());
+          const full = forceFullSnapshot || ts - lastFullSnapshotAt >= FULL_SNAPSHOT_INTERVAL_MS;
+          if (full) lastFullSnapshotAt = ts;
+          host.broadcastState(makeSnapshot(full));
         }
       } else {
         state.now = Date.now();

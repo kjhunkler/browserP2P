@@ -4,7 +4,7 @@
 (function () {
   "use strict";
 
-  const SNAPSHOT_HZ = 12;
+  const SNAPSHOT_HEARTBEAT_MS = 15000;
   const PERF_LOG_INTERVAL_MS = 5000;
   const TILE_VALIDATION_INTERVAL_MS = 2400;
   const ENJOYMENT_MESSAGE_CHANCE = 0.28;
@@ -55,6 +55,8 @@
     let lastCssHeight = 0;
     let activePointerId = null;
     let audioCtx = null;
+    let musicTimer = null;
+    let musicStep = 0;
     let eventSeq = 0;
     let seenEventSeq = 0;
     let ui = { board: null, hand: null, handTile: null, deck: null, reset: null, cells: new Map(), scale: 1 };
@@ -65,6 +67,7 @@
     let handMessage = { text: "", previous: "", changedAt: 0, duration: 520 };
     const activePointers = new Map();
     const view = { zoom: 1, rot: 0, panX: 0, panY: 0 };
+    const cosmeticSeed = Math.floor(Math.random() * 1_000_000_000);
     const events = [];
     const pond = { tileIds: new Set(), entities: [], ripples: [] };
     const drops = [];
@@ -124,6 +127,60 @@
           osc.stop(t + dur);
         }
       } catch {}
+    }
+
+    function ensureAudio() {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+      return audioCtx;
+    }
+
+    function noteFreq(note) {
+      return 440 * Math.pow(2, (note - 69) / 12);
+    }
+
+    function playMusicTone(freq, start, dur, vol, type = "sine") {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, start);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.996, start + dur);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(vol, start + 0.18);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(start);
+      osc.stop(start + dur + 0.05);
+    }
+
+    function playMusicStep() {
+      try {
+        ensureAudio();
+        const t = audioCtx.currentTime + 0.03;
+        const melody = [69, 72, 76, 74, 72, 67, 64, null, 67, 71, 74, 72, 69, 64, 62, null];
+        const bass = [45, null, 52, null, 48, null, 55, null, 43, null, 50, null, 48, null, 52, null];
+        const note = melody[musicStep % melody.length];
+        const root = bass[musicStep % bass.length];
+        if (note !== null) playMusicTone(noteFreq(note), t, 1.85, 0.010, "sine");
+        if (root !== null) {
+          playMusicTone(noteFreq(root), t, 2.8, 0.007, "triangle");
+          playMusicTone(noteFreq(root + 7), t + 0.06, 2.4, 0.004, "sine");
+        }
+        musicStep++;
+      } catch {}
+    }
+
+    function startMusic() {
+      if (musicTimer) return;
+      playMusicStep();
+      musicTimer = setInterval(playMusicStep, 1650);
+    }
+
+    function stopMusic() {
+      if (!musicTimer) return;
+      clearInterval(musicTimer);
+      musicTimer = null;
     }
 
     function emitEvent(kind, x = 0.5, y = 0.5, color = "#ffffff") {
@@ -358,6 +415,23 @@
       return [0, 1, 2, 3].map((i) => tile.edges[(i - r + 4) % 4]);
     }
 
+    function normalizedTileRot(rot) {
+      return ((Math.round(rot || 0) % 4) + 4) % 4;
+    }
+
+    function boardQuarterTurns() {
+      return normalizedTileRot(view.rot / (Math.PI / 2));
+    }
+
+    function placementRotationForView(current = currentFor()) {
+      if (!current) return 0;
+      return normalizedTileRot((current.rot || 0) - boardQuarterTurns());
+    }
+
+    function currentForPlacementView(current = currentFor()) {
+      return current ? { ...current, rot: placementRotationForView(current) } : null;
+    }
+
     function cellEdges(cell) { return rotatedEdges(cell.tile, cell.rot || 0); }
 
     function legalAt(x, y, current = currentFor()) {
@@ -416,10 +490,11 @@
       }
     }
 
-    function placeTile(id, x, y) {
+    function placeTile(id, x, y, rotOverride = null) {
       const current = currentFor(id);
-      if (!current || state.over || !legalAt(x, y, current)) return;
-      state.board[key(x, y)] = { tile: current.tile, rot: current.rot || 0, owner: id, turn: state.turn++ };
+      const placement = current && rotOverride !== null ? { ...current, rot: normalizedTileRot(rotOverride) } : current;
+      if (!placement || state.over || !legalAt(x, y, placement)) return;
+      state.board[key(x, y)] = { tile: placement.tile, rot: placement.rot || 0, owner: id, turn: state.turn++ };
       const p = boardToNorm(x, y);
       emitEvent("place", p.x, p.y, "#dff9ff");
       tryCompleteSquares(x, y);
@@ -459,7 +534,7 @@
         current.rot = ((current.rot || 0) + 1) % 4;
         state.message = "The tile turns softly in your hands.";
       } else if (input.type === "place") {
-        placeTile(id, Math.round(input.x), Math.round(input.y));
+        placeTile(id, Math.round(input.x), Math.round(input.y), input.rot ?? null);
         if (id === myId) startDrawAnimation(currentFor(id)?.tile);
       } else if (input.type === "swap") {
         swapTile(id);
@@ -555,9 +630,6 @@
       state.won = !!snapshot.won;
       state.message = snapshot.message || "Listen to the rain and place the next tile.";
       applyEvents(snapshot.events);
-      pond.tileIds.clear();
-      pond.entities = [];
-      pond.ripples = [];
     }
 
     function ensureCanvasSize() {
@@ -684,13 +756,13 @@
 
     function spawnPondLifeForTile(k, id) {
       const cell = parseKey(k);
-      const seed = tileSeed(id);
+      const seed = tileSeed(`${id}-${cosmeticSeed}`);
       const roll = seeded(seed, 3);
       addPondEntity("pad", cell, seed, 0, 0.00022, 0.065);
-      if (roll > 0.72) addPondEntity("koi", cell, seed, 1, 0.0010 + seeded(seed, 16) * 0.0014, 0.035);
-      else if (roll > 0.62) addPondEntity("shadow", cell, seed, 2, 0.004 + seeded(seed, 18) * 0.005, 0.025);
-      else if (roll > 0.42) addPondEntity("bug", cell, seed, 3, 0.0045, 0.030, seeded(seed, 19) > 0.55 ? "dragonfly" : "butterfly");
-      if (seeded(seed, 8) > 0.88) addPondEntity("turtle", cell, seed, 4, 0.0022 / 3, 0.045);
+      if (roll > 0.58) addPondEntity("koi", cell, seed, 1, 0.0010 + seeded(seed, 16) * 0.0014, 0.045);
+      else if (roll > 0.44) addPondEntity("shadow", cell, seed, 2, 0.004 + seeded(seed, 18) * 0.005, 0.032);
+      else if (roll > 0.22) addPondEntity("bug", cell, seed, 3, 0.0045, 0.038, seeded(seed, 19) > 0.55 ? "dragonfly" : "butterfly");
+      if (seeded(seed, 8) > 0.74) addPondEntity("turtle", cell, seed, 4, 0.0022 / 3, 0.055);
     }
 
     function addPondEntity(type, cell, seed, i, speed, radius, bugKind = null) {
@@ -1050,13 +1122,13 @@
       const p = profile(owner);
       ctx.fillStyle = p.color || "#ffffff";
       ctx.beginPath();
-      ctx.arc(x + size * 0.82, y + size * 0.18, size * 0.105, 0, Math.PI * 2);
+      ctx.arc(x + size * 0.86, y + size * 0.14, size * 0.065, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = "#10202b";
-      ctx.font = `${Math.max(10, size * 0.13)}px serif`;
+      ctx.font = `${Math.max(7, size * 0.08)}px serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(p.icon || "●", x + size * 0.82, y + size * 0.18);
+      ctx.fillText(p.icon || "●", x + size * 0.86, y + size * 0.14);
     }
 
     function drawTileBack(x, y, size, alpha = 1) {
@@ -1473,8 +1545,9 @@
 
     function drawBoard() {
       const current = currentFor();
-      const legal = new Set(legalCellsFor(current).map((p) => key(p.x, p.y)));
-      const hoverKey = drag?.hover && legalAt(drag.hover.x, drag.hover.y, current) ? key(drag.hover.x, drag.hover.y) : null;
+      const placementCurrent = currentForPlacementView(current);
+      const legal = new Set(legalCellsFor(placementCurrent).map((p) => key(p.x, p.y)));
+      const hoverKey = drag?.hover && legalAt(drag.hover.x, drag.hover.y, placementCurrent) ? key(drag.hover.x, drag.hover.y) : null;
       ctx.save();
       ctx.fillStyle = "rgba(227,249,255,0.045)";
       drawRoundRect(ui.board.x, ui.board.y, ui.board.w, ui.board.h, 22);
@@ -1512,7 +1585,7 @@
         ctx.fill();
         ctx.stroke();
         ctx.restore();
-        if (current?.tile) drawBoardTile(current.tile, current.rot || 0, p.x, p.y, ui.view.scale - 2, 0.28, null);
+        if (placementCurrent?.tile) drawBoardTile(placementCurrent.tile, placementCurrent.rot || 0, p.x, p.y, ui.view.scale - 2, 0.28, null);
       }
 
       for (const b of state.blossoms) {
@@ -1833,6 +1906,7 @@
     }
 
     function onPointerDown(e) {
+      startMusic();
       const p = pointerPoint(e);
       const pointerId = e.pointerId ?? "mouse";
       activePointers.set(pointerId, pointerEntry(e));
@@ -1894,7 +1968,7 @@
       const p = pointerPoint(e);
       const moved = drag ? Math.hypot(p.x - drag.startX, p.y - drag.startY) : 0;
       if (drag && pointIn(ui.deck, p.x, p.y)) sendAction({ type: "swap" });
-      else if (hover && legalAt(hover.x, hover.y)) sendAction({ type: "place", x: hover.x, y: hover.y });
+      else if (hover && legalAt(hover.x, hover.y, currentForPlacementView())) sendAction({ type: "place", x: hover.x, y: hover.y, rot: placementRotationForView() });
       else if (drag && moved < 8 && pointIn(ui.handTile, p.x, p.y)) rotateCurrent();
       drag = null;
       if (activePointerId !== null && canvas.hasPointerCapture?.(activePointerId)) canvas.releasePointerCapture(activePointerId);
@@ -1910,6 +1984,8 @@
     }
 
     function onKeyDown(e) {
+      const target = document.activeElement || e.target;
+      if (target?.closest?.("input, textarea, select, [contenteditable='true']")) return;
       if (e.key === "r" || e.key === "R" || e.key === " ") { e.preventDefault(); rotateCurrent(); }
       else if (e.key === "d" || e.key === "D") { e.preventDefault(); sendAction({ type: "swap" }); }
       else if (e.key === "q" || e.key === "Q") { e.preventDefault(); view.rot -= Math.PI / 12; }
@@ -1942,7 +2018,7 @@
       if (!lastTs) lastTs = ts;
       const frameMs = ts - lastTs;
       lastTs = ts;
-      if (isHost() && hasRemotePeers() && ts - lastSnapshotAt >= 1000 / SNAPSHOT_HZ) {
+      if (isHost() && hasRemotePeers() && ts - lastSnapshotAt >= SNAPSHOT_HEARTBEAT_MS) {
         lastSnapshotAt = ts;
         host.broadcastState(timedSnapshot());
       }
@@ -1992,6 +2068,7 @@
       },
       destroy() {
         cancelAnimationFrame(rafId);
+        stopMusic();
         if (activePointerId !== null && canvas.hasPointerCapture?.(activePointerId)) canvas.releasePointerCapture(activePointerId);
         activePointerId = null;
         window.removeEventListener("resize", resize);

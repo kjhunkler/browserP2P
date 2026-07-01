@@ -1,3 +1,4 @@
 # Local dev helper — contains a machine-specific absolute path
 /.claude/
 /.vs
+/.github/copilot-instructions.md

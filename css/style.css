@@ -136,7 +136,12 @@ input, textarea, select {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #10202b;
+  font-size: 0.72rem;
+  font-weight: 900;
 }
 
 /* ===== Play screen ===== */
@@ -163,6 +168,11 @@ input, textarea, select {
   background: rgba(18, 18, 31, 0.96);
   border-bottom: 1px solid #2c2c44;
   flex-shrink: 0;
+}
+
+.play-menu-bar .player-list {
+  flex: 1 1 auto;
+  justify-content: flex-start;
 }
 
 .play-menu-bar::before {

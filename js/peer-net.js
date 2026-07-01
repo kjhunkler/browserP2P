@@ -37,7 +37,9 @@ class PeerNet {
     this.isHost = false;
     this.code = null;
     this.conns = new Map(); // host: peerId -> DataConnection
+    this.voiceConns = new Map(); // host: peerId -> voice DataConnection
     this.hostConn = null; // client: connection to the host
+    this.hostVoiceConn = null; // client: voice connection to the host
     this.mediaCalls = new Map(); // peerId -> MediaConnection
     this._handlers = new Map();
     this._closed = false;
@@ -91,6 +93,10 @@ class PeerNet {
   // and the auto() election path.
   _acceptConnections(peer) {
     peer.on("connection", (conn) => {
+      if (conn.label === "voice") {
+        this._acceptVoiceConnection(conn);
+        return;
+      }
       conn.on("open", () => {
         if (this._closed) return;
         this.conns.set(conn.peer, conn);
@@ -104,6 +110,29 @@ class PeerNet {
       });
     });
     this._acceptMediaCalls(peer);
+  }
+
+  _acceptVoiceConnection(conn) {
+    conn.on("open", () => {
+      if (this._closed) return;
+      this.voiceConns.set(conn.peer, conn);
+      this._emit("voice-open", conn.peer);
+    });
+    conn.on("data", (data) => { if (!this._closed) this._emit("voice-message", { from: conn.peer, data }); });
+    conn.on("close", () => {
+      if (this._closed) return;
+      this.voiceConns.delete(conn.peer);
+      this._emit("voice-close", conn.peer);
+    });
+  }
+
+  _connectVoiceToHost(peer, hostId) {
+    if (!peer || this._closed) return;
+    const conn = peer.connect(hostId, { label: "voice", reliable: false });
+    this.hostVoiceConn = conn;
+    conn.on("open", () => { if (!this._closed) this._emit("voice-open", "host"); });
+    conn.on("data", (data) => { if (!this._closed) this._emit("voice-message", { from: "host", data }); });
+    conn.on("close", () => { if (!this._closed) this._emit("voice-close", "host"); });
   }
 
   _acceptMediaCalls(peer) {
@@ -161,6 +190,7 @@ class PeerNet {
         settled = true;
         clearTimeout(timer);
         this._acceptMediaCalls(peer);
+        this._connectVoiceToHost(peer, this._autoId);
         this._emit("connected");
       });
       conn.on("data",  (data) => { if (!this._closed) this._emit("message", { from: "host", data }); });
@@ -219,6 +249,7 @@ class PeerNet {
       conn.on("open", () => {
         if (this._closed) return;
         this._acceptMediaCalls(peer);
+        this._connectVoiceToHost(peer, PREFIX + code);
         this._emit("connected");
       });
       conn.on("data", (data) => { if (!this._closed) this._emit("message", { from: "host", data }); });
@@ -245,6 +276,28 @@ class PeerNet {
   // Client -> host.
   send(msg) {
     if (this.hostConn && this.hostConn.open) this.hostConn.send(msg);
+  }
+
+  // Host -> every client over the dedicated live-voice channel.
+  broadcastVoice(msg) {
+    for (const [peerId, conn] of this.conns) {
+      const voiceConn = this.voiceConns.get(peerId);
+      if (voiceConn?.open) voiceConn.send(msg);
+      else if (conn.open) conn.send(msg);
+    }
+  }
+
+  // Host -> one client over the dedicated live-voice channel.
+  sendVoiceTo(peerId, msg) {
+    const conn = this.voiceConns.get(peerId);
+    if (conn && conn.open) conn.send(msg);
+    else this.sendTo(peerId, msg);
+  }
+
+  // Client -> host over the dedicated live-voice channel.
+  sendVoice(msg) {
+    if (this.hostVoiceConn && this.hostVoiceConn.open) this.hostVoiceConn.send(msg);
+    else this.send(msg);
   }
 
   call(peerId, stream) {
@@ -280,7 +333,9 @@ class PeerNet {
     this.code = null;
     this._autoId = null;
     this.conns.clear();
+    this.voiceConns.clear();
     this.mediaCalls.clear();
     this.hostConn = null;
+    this.hostVoiceConn = null;
   }
 }

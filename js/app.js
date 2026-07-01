@@ -456,6 +456,16 @@ function wireNetEvents() {
     else handleClientMsg(data);
   });
 
+  net.on("voice-message", ({ from, data }) => {
+    if (net.isHost) handleHostVoiceMsg(from, data);
+    else handleClientVoiceMsg(data);
+  });
+
+  net.on("voice-close", (peerId) => {
+    const id = peerId === "host" ? lastHostOrder[0] : peerMap.get(peerId);
+    if (id) markSilent(id);
+  });
+
   net.on("media-call", handleMediaCall);
   net.on("media-close", removeVideoTile);
 }
@@ -557,6 +567,21 @@ function handleHostMsg(peerId, msg) {
     handleLiveAudio(msg);
     net.broadcast(msg);
   }
+}
+
+function handleHostVoiceMsg(peerId, msg) {
+  if (msg.t !== "audio-start" && msg.t !== "audio-stop" && msg.t !== "audio-pcm") return;
+  const id = peerMap.get(peerId);
+  if (!id) return;
+  msg.fromId = id;
+  handleLiveAudio(msg);
+  for (const [targetPeerId, conn] of net.voiceConns) {
+    if (targetPeerId !== peerId && conn.open) conn.send(msg);
+  }
+}
+
+function handleClientVoiceMsg(msg) {
+  if (msg.t === "audio-start" || msg.t === "audio-stop" || msg.t === "audio-pcm") handleLiveAudio(msg);
 }
 
 // ---- client-side message handling ----
@@ -1535,8 +1560,8 @@ function playLivePcm(fromId, payload) {
 }
 
 function sendLiveMsg(msg) {
-  if (net.isHost) net.broadcast(msg);
-  else net.send(msg);
+  if (net.isHost) net.broadcastVoice(msg);
+  else net.sendVoice(msg);
 }
 
 async function startLiveVoice() {

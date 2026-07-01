@@ -5,6 +5,8 @@
   "use strict";
 
   const SNAPSHOT_HZ = 20;
+  const SETTLED_SNAPSHOT_HZ = 4;
+  const SETTLED_FULL_SNAPSHOT_MS = 5000;
   const PHYSICS_DT = 1 / 60;
   const GRAVITY = 1.25;
   const FLOOR_Y = 0.90;
@@ -33,6 +35,8 @@
     let lastTs = 0;
     let accumulator = 0;
     let lastSnapshotAt = 0;
+    let lastSettledFullSnapshotAt = 0;
+    let forceSnapshot = true;
     let lastCssWidth = 0;
     let lastCssHeight = 0;
     let activePointerId = null;
@@ -140,6 +144,7 @@
       state.lastHeight = 0;
       for (const p of host.getPlayers()) state.scores[p.id] = 0;
       addFoundation();
+      forceSnapshot = true;
       emitEvent("reset", 0.5, FLOOR_Y, 1, "#ffffff");
     }
 
@@ -259,6 +264,10 @@
         const p = contacts[0];
         emitEvent("hit", p.x, p.y, Math.min(1.2, maxJ * 5), "#d8e6ff");
       }
+    }
+
+    function towerActive() {
+      return state.blocks.some((b) => !b.fixed && (Math.hypot(b.vx || 0, b.vy || 0) > 0.006 || Math.abs(b.av || 0) > 0.018 || (b.sleep || 0) < 0.65));
     }
 
     function solveContactImpulse(a, b, n, p, contactCount, onImpulse) {
@@ -416,6 +425,7 @@
       const b = makeBlock("b" + state.nextId++, id, x, y, angle, { ...shape, color: profile(id).color || shape.color });
       b.vy = 0;
       state.blocks.push(b);
+      forceSnapshot = true;
       emitEvent("place", x, y, 0.9, b.color);
     }
 
@@ -679,8 +689,13 @@
       lastTs = ts;
       if (isHost()) {
         updateHost(dt);
-        if (ts - lastSnapshotAt >= 1000 / SNAPSHOT_HZ) {
+        const active = towerActive();
+        const interval = 1000 / (active ? SNAPSHOT_HZ : SETTLED_SNAPSHOT_HZ);
+        const needsSettledFull = !active && ts - lastSettledFullSnapshotAt >= SETTLED_FULL_SNAPSHOT_MS;
+        if (forceSnapshot || needsSettledFull || ts - lastSnapshotAt >= interval) {
           lastSnapshotAt = ts;
+          if (!active) lastSettledFullSnapshotAt = ts;
+          forceSnapshot = false;
           host.broadcastState(makeSnapshot());
         }
       }
