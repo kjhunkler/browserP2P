@@ -763,18 +763,16 @@
 
     function drawTracks() {
       const tNow = Date.now();
-      ctx.save();
       for (const t of state.tracks) {
         const a = clamp(1 - (tNow - t.t) / DESPAWN_TRACK_MS, 0, 1) * 0.28;
+        ctx.save();
         ctx.globalAlpha = a;
         ctx.translate(sx(t.x), sy(t.y));
         ctx.rotate(t.a);
         ctx.fillStyle = "#6b8498";
         ctx.fillRect(-0.22 * camera.scale, -0.05 * camera.scale, 0.44 * camera.scale, 0.10 * camera.scale);
-        ctx.setTransform(ctx.getTransform().a, 0, 0, ctx.getTransform().d, 0, 0);
-        ctx.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
+        ctx.restore();
       }
-      ctx.restore();
     }
 
     function drawItemsAndObjects() {

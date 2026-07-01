@@ -22,6 +22,9 @@
 const PREFIX = "bp2p-"; // namespaces our room codes on the shared public broker
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O/1/I/L ambiguity
 const CODE_LEN = 4;
+const INTERNAL = "__bp2p";
+const HEARTBEAT_MS = 1000;
+const HOST_WATCHDOG_MS = 3500;
 
 function makeCode() {
   let s = "";
@@ -43,12 +46,69 @@ class PeerNet {
     this.mediaCalls = new Map(); // peerId -> MediaConnection
     this._handlers = new Map();
     this._closed = false;
+    this._heartbeatTimer = null;
+    this._watchdogTimer = null;
+    this._lastHostSeen = 0;
+    this._hostClosedEmitted = false;
   }
 
   on(event, fn) {
     if (!this._handlers.has(event)) this._handlers.set(event, new Set());
     this._handlers.get(event).add(fn);
     return this;
+  }
+
+  _isInternal(data) {
+    return data && data.t === INTERNAL;
+  }
+
+  _handleInternal(data, conn) {
+    if (!this._isInternal(data)) return false;
+    if (data.kind === "hb") {
+      this._markHostSeen();
+      if (conn?.open) conn.send({ t: INTERNAL, kind: "ack", ts: Date.now() });
+    }
+    return true;
+  }
+
+  _markHostSeen() {
+    this._lastHostSeen = Date.now();
+  }
+
+  _emitHostClosedOnce() {
+    if (this._closed || this._hostClosedEmitted) return;
+    this._hostClosedEmitted = true;
+    this._stopWatchdog();
+    this._emit("host-closed");
+  }
+
+  _startHeartbeat() {
+    this._stopHeartbeat();
+    this._heartbeatTimer = setInterval(() => {
+      if (this._closed || !this.isHost) return;
+      const msg = { t: INTERNAL, kind: "hb", ts: Date.now() };
+      for (const conn of this.conns.values()) if (conn.open) conn.send(msg);
+    }, HEARTBEAT_MS);
+  }
+
+  _stopHeartbeat() {
+    clearInterval(this._heartbeatTimer);
+    this._heartbeatTimer = null;
+  }
+
+  _startWatchdog() {
+    this._stopWatchdog();
+    this._hostClosedEmitted = false;
+    this._markHostSeen();
+    this._watchdogTimer = setInterval(() => {
+      if (this._closed || this.isHost) return;
+      if (Date.now() - this._lastHostSeen > HOST_WATCHDOG_MS) this._emitHostClosedOnce();
+    }, 500);
+  }
+
+  _stopWatchdog() {
+    clearInterval(this._watchdogTimer);
+    this._watchdogTimer = null;
   }
 
   _emit(event, payload) {
@@ -70,6 +130,7 @@ class PeerNet {
       peer.on("open", () => {
         if (this._closed) return;
         this.code = code;
+        this._startHeartbeat();
         this._emit("ready");
       });
 
@@ -102,7 +163,7 @@ class PeerNet {
         this.conns.set(conn.peer, conn);
         this._emit("peer-join", conn.peer);
       });
-      conn.on("data", (data) => { if (!this._closed) this._emit("message", { from: conn.peer, data }); });
+      conn.on("data", (data) => { if (!this._closed && !this._handleInternal(data, conn)) this._emit("message", { from: conn.peer, data }); });
       conn.on("close", () => {
         if (this._closed) return;
         this.conns.delete(conn.peer);
@@ -191,10 +252,11 @@ class PeerNet {
         clearTimeout(timer);
         this._acceptMediaCalls(peer);
         this._connectVoiceToHost(peer, this._autoId);
+        this._startWatchdog();
         this._emit("connected");
       });
-      conn.on("data",  (data) => { if (!this._closed) this._emit("message", { from: "host", data }); });
-      conn.on("close", ()     => { if (!this._closed) this._emit("host-closed"); });
+      conn.on("data",  (data) => { if (!this._closed) { this._markHostSeen(); if (!this._handleInternal(data, conn)) this._emit("message", { from: "host", data }); } });
+      conn.on("close", ()     => { this._emitHostClosedOnce(); });
     });
 
     peer.on("error", (err) => {
@@ -216,7 +278,7 @@ class PeerNet {
     const peer = new Peer(this._autoId, { debug: 1 });
     this.peer = peer;
 
-    peer.on("open", () => { if (!this._closed) this._emit("ready"); });
+    peer.on("open", () => { if (!this._closed) { this._startHeartbeat(); this._emit("ready"); } });
     this._acceptConnections(peer);
 
     peer.on("error", (err) => {
@@ -250,10 +312,11 @@ class PeerNet {
         if (this._closed) return;
         this._acceptMediaCalls(peer);
         this._connectVoiceToHost(peer, PREFIX + code);
+        this._startWatchdog();
         this._emit("connected");
       });
-      conn.on("data", (data) => { if (!this._closed) this._emit("message", { from: "host", data }); });
-      conn.on("close", () => { if (!this._closed) this._emit("host-closed"); });
+      conn.on("data", (data) => { if (!this._closed) { this._markHostSeen(); if (!this._handleInternal(data, conn)) this._emit("message", { from: "host", data }); } });
+      conn.on("close", () => { this._emitHostClosedOnce(); });
     });
 
     peer.on("error", (err) => { if (!this._closed) this._emit("error", err); });
@@ -327,6 +390,13 @@ class PeerNet {
 
   destroy() {
     this._closed = true;
+    this._stopHeartbeat();
+    this._stopWatchdog();
+    for (const conn of this.conns.values()) conn.close?.();
+    for (const conn of this.voiceConns.values()) conn.close?.();
+    this.hostConn?.close?.();
+    this.hostVoiceConn?.close?.();
+    for (const call of this.mediaCalls.values()) call.close?.();
     if (this.peer) this.peer.destroy();
     this.peer = null;
     this.isHost = false;

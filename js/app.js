@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.5.8";
+const APP_VERSION = "2.5.9";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
@@ -210,6 +210,15 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") yieldHostForBackground("browser hidden");
   if (document.visibilityState === "visible") rejoinAfterYield();
 });
+
+function releaseNetworkOnPageExit() {
+  hasLeftLobby = true;
+  stopHostLoop();
+  try { net?.destroy(); } catch {}
+}
+
+window.addEventListener("pagehide", releaseNetworkOnPageExit);
+window.addEventListener("beforeunload", releaseNetworkOnPageExit);
 
 // ============================================================ NOTIFICATIONS =
 const NOTIFY_JOIN_KEY = "bp2p-notify-joins";
