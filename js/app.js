@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.5.11";
+const APP_VERSION = "2.5.12";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
@@ -420,20 +420,7 @@ function wireNetEvents() {
   net.on("peer-join", () => renderLobby());
 
   net.on("peer-leave", (peerId) => {
-    const id = peerMap.get(peerId);
-    if (id) {
-      const p = players.get(id);
-      const name = p ? p.name : "Someone";
-      if (p) p.connected = false;
-      peerMap.delete(peerId);
-      liveVideoPeers.delete(id);
-      removeVideoTile(id);
-      markSilent(id);
-      pushSys(name + " left");
-      net.broadcast({ t: "sys", text: name + " left" });
-      notifyActiveGamePlayersChanged();
-    }
-    renderLobby();
+    markPeerDisconnected(peerId);
   });
 
   net.on("connected", () => {
@@ -511,6 +498,9 @@ function handleHostMsg(peerId, msg) {
     renderLobby();
     notifyActiveGamePlayersChanged();
 
+  } else if (msg.t === "leave") {
+    markPeerDisconnected(peerId);
+
   } else if (msg.t === "input") {
     const id = peerMap.get(peerId);
     const p  = id && players.get(id);
@@ -537,6 +527,22 @@ function handleHostMsg(peerId, msg) {
       p.color = msg.preferredColor;
       usedColors.add(p.color);
     }
+
+function markPeerDisconnected(peerId) {
+  const id = peerMap.get(peerId);
+  if (!id) return;
+  const p = players.get(id);
+  const name = p ? p.name : "Someone";
+  if (p) p.connected = false;
+  peerMap.delete(peerId);
+  liveVideoPeers.delete(id);
+  removeVideoTile(id);
+  markSilent(id);
+  pushSys(name + " left");
+  net.broadcast({ t: "sys", text: name + " left" });
+  renderLobby();
+  notifyActiveGamePlayersChanged();
+}
     profiles.set(id, { name: p.name, color: p.color, icon: p.icon });
     net.broadcast({ t: "profile", id, name: p.name, color: p.color, icon: p.icon });
     renderChat();
@@ -1806,6 +1812,9 @@ function closeProfileSheet() {
 }
 
 function leaveLobby() {
+  if (!net.isHost) {
+    try { net.send({ t: "leave" }); } catch {}
+  }
   hasLeftLobby = true;
   autoMode = false;
   keepPlayingAfterMigration = false;

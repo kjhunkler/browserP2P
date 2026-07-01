@@ -318,7 +318,7 @@
       if (!safePlayerSpawn(pos)) pos = findSafePlayerSpawn(rand);
       p = {
         id, x: pos.x, y: pos.y, vx: 0, vy: 0, aimX: 1, aimY: 0, hp: 100, warmth: 100, cold: 0,
-        snowballs: 6, binoculars: 0, alive: true, spectator: false, weapon: "snowball", cool: 0,
+        snowballs: 6, binoculars: 0, alive: true, spectator: false, weapon: "snowball", cool: 0, connected: true,
         name: prof.name, color: prof.color || "#7cfc9b", icon: prof.icon || "❄️", kills: 0, lastTrackAt: 0,
       };
       state.players[id] = p;
@@ -329,7 +329,7 @@
       if (!pos || nearMapEdge(pos, 2)) return false;
       if (inPond(pos.x, pos.y) || inBuilding(pos.x, pos.y)) return false;
       if (blocked(pos.x, pos.y, PLAYER_R + 0.08)) return false;
-      for (const p of Object.values(state.players)) {
+      for (const p of activePlayers()) {
         if (p.alive && Math.hypot(p.x - pos.x, p.y - pos.y) < PLAYER_R * 4) return false;
       }
       return true;
@@ -354,18 +354,23 @@
         if (!state.players[p.id]) spawnPlayer(p.id, true);
         else {
           const prof = profile(p.id);
-          Object.assign(state.players[p.id], { name: prof.name, color: prof.color, icon: prof.icon });
+          Object.assign(state.players[p.id], { name: prof.name, color: prof.color, icon: prof.icon, connected: p.connected !== false });
           if (newRound) spawnPlayer(p.id, true);
         }
       }
+      for (const p of Object.values(state.players)) if (!live.has(p.id)) p.connected = false;
     }
 
     function visibleToAnyPlayer(x, y) {
       for (const p of Object.values(state.players)) {
-        if (!p.alive) continue;
+        if (!p.alive || p.connected === false) continue;
         if (Math.hypot(p.x - x, p.y - y) <= visionFor(p) + 2) return true;
       }
       return false;
+    }
+
+    function activePlayers() {
+      return Object.values(state.players).filter((p) => p.connected !== false);
     }
 
     function visionFor(p) { return (p.binoculars ? BINOCULAR_VISION : VISION) * (p.warmth < 25 ? 0.78 : 1); }
@@ -413,7 +418,7 @@
         if (d > MELEE_RANGE || d < 0.001) return false;
         return (dx / d) * attacker.aimX + (dy / d) * attacker.aimY >= Math.cos(MELEE_HALF_ANGLE);
       };
-      for (const p of Object.values(state.players)) if (p.id !== attacker.id && p.alive && hitArc(p)) damagePlayer(p, MELEE_DAMAGE, attacker.id);
+      for (const p of activePlayers()) if (p.id !== attacker.id && p.alive && hitArc(p)) damagePlayer(p, MELEE_DAMAGE, attacker.id);
       for (const s of state.snowmen) if (!s.dead && hitArc(s)) damageSnowman(s, MELEE_DAMAGE, attacker.id);
       for (const o of state.objects) if (!o.dead && hitArc(o)) damageObject(o, MELEE_DAMAGE, attacker.id);
     }
@@ -477,7 +482,7 @@
         if (s.dead) continue;
         s.cool = Math.max(0, s.cool - dt);
         let target = null, best = 8.5;
-        for (const p of Object.values(state.players)) {
+        for (const p of activePlayers()) {
           if (!p.alive) continue;
           const d = Math.hypot(p.x - s.x, p.y - s.y);
           if (d < best && sameVisibilitySpace(s, p)) { best = d; target = p; }
@@ -616,8 +621,9 @@
     }
 
     function checkWinner() {
-      const alive = Object.values(state.players).filter((p) => p.alive);
-      const playerCount = Object.keys(state.players).length;
+      const connectedPlayers = activePlayers();
+      const alive = connectedPlayers.filter((p) => p.alive);
+      const playerCount = connectedPlayers.length;
       if ((alive.length === 0 || (alive.length === 1 && playerCount > 1)) && playerCount > 0 && !state.over) {
         state.over = true;
         state.winner = alive.length === 1 ? alive[0].id : null;
@@ -813,7 +819,7 @@
       }
       spectatorCamera = null;
       let target = me;
-      if (!target?.alive) target = Object.values(state.players).find((p) => p.alive) || me;
+      if (!target?.alive) target = activePlayers().find((p) => p.alive) || me;
       if (target) target = visualEntity(target, "players");
       if (target) {
         camera.x += (target.x - camera.x) * 0.15;
@@ -906,6 +912,7 @@
         if (visibleEntity(vs)) drawSnowman(vs);
       }
       for (const p of Object.values(state.players)) {
+        if (p.connected === false) continue;
         const vp = visualEntity(p, "players");
         if (visibleEntity(vp)) drawPlayer(vp);
       }
@@ -914,7 +921,7 @@
     function visibleEntity(e) {
       if (isSpectating()) return true;
       const me = state.players[myId];
-      const viewer = me?.alive ? me : (Object.values(state.players).find((p) => p.alive) || me);
+      const viewer = me?.alive ? me : (activePlayers().find((p) => p.alive) || me);
       if (!viewer) return true;
       const eb = inBuilding(e.x, e.y), vb = inBuilding(viewer.x, viewer.y);
       if (eb && (!vb || eb.id !== vb.id)) return false;
@@ -935,7 +942,7 @@
       ctx.fillStyle = p.color || "#7cfc9b";
       ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
       drawText(p.icon || "❄️", x, y + 1, Math.max(14, r * 1.2), "#10202b");
-      drawThermometer(x - r - 7, y - r - 18, p.warmth / 100);
+      drawThermometer(x - r - 7, y - r - 8, p.warmth / 100);
       drawBar(x - r, y - r - 12, r * 2, 4, p.hp / 100, "#ef4444");
       drawPlayerAmmoBadge(p, x + r * 0.72, y - r * 0.72, r);
       drawText((host.hostCrown?.(p.id) || "") + (p.name || "Player"), x, y - r - 20, 11, "#102033");
@@ -1005,7 +1012,7 @@
     function enforceViewportVision() {
       if (isSpectating()) return;
       const me = state.players[myId];
-      const viewer = me?.alive ? me : (Object.values(state.players).find((p) => p.alive) || me);
+      const viewer = me?.alive ? me : (activePlayers().find((p) => p.alive) || me);
       if (!viewer) return;
       const range = visionFor(viewer) * camera.scale;
       const cx = sx(viewer.x), cy = sy(viewer.y);
@@ -1053,7 +1060,7 @@
       ctx.textAlign = "left"; ctx.textBaseline = "middle";
       drawText("❄️ Snow Brawl Royale", 12, 17, 16, "#eef6ff", "left");
       if (me) drawText(`HP ${Math.ceil(me.hp)} · Warm ${Math.ceil(me.warmth)} · ⚪ ${me.snowballs || 0} · ${me.weapon === "melee" ? "Shovel" : "Snowballs"}${me.binoculars ? " · 🔭" : ""}`, 12, 39, 12, "#d8e6ff", "left");
-      const alive = Object.values(state.players).filter((p) => p.alive).length;
+      const alive = activePlayers().filter((p) => p.alive).length;
       drawText(`${alive} alive`, canvas.clientWidth - 12, 22, 13, "#eef6ff", "right");
       weaponRect = { x: canvas.clientWidth - 104, y: 58, w: 92, h: 34 };
       ctx.fillStyle = "rgba(10,18,30,0.76)"; roundRect(weaponRect.x, weaponRect.y, weaponRect.w, weaponRect.h, 12); ctx.fill();
