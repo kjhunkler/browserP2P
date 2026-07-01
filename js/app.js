@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.5.6";
+const APP_VERSION = "2.5.7";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
@@ -1111,6 +1111,7 @@ const GAME_SCRIPTS = {
   "air-hockey": "js/games/air-hockey.js",
   "paint-panic": "js/games/paint-panic.js",
   tower: "js/games/tower.js",
+  "snow-brawl": "js/games/snow-brawl.js",
   "gentle-rain": "js/games/gentle-rain.js",
 };
 
