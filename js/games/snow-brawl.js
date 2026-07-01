@@ -15,12 +15,18 @@
   const WARM_SECONDS = 5;
   const VISION = 9.5;
   const BINOCULAR_VISION = 15.5;
+  const VIEW_W = 24;
+  const VIEW_H = 16;
   const PROJECTILE_SPEED = 16;
   const PROJECTILE_LIFE = 0.9;
   const SNOWBALL_DAMAGE = 20;
   const MELEE_DAMAGE = 50;
+  const MELEE_RANGE = 1.55;
+  const MELEE_HALF_ANGLE = Math.PI / 5;
+  const SNOWBALL_TARGET_RANGE = PROJECTILE_SPEED * PROJECTILE_LIFE;
   const SNOWMAN_SNOWBALL_DAMAGE = 12;
-  const DESPAWN_TRACK_MS = 9000;
+  const DESPAWN_TRACK_MS = 30000;
+  const ROUND_RESTART_MS = 5000;
 
   const ITEM_TYPES = {
     heart: { emoji: "❤️", r: 0.28 },
@@ -48,6 +54,7 @@
     let leftStick = null;
     let rightStick = null;
     let mouseAim = { x: 1, y: 0, active: false };
+    let spectatorCamera = null;
     let keys = new Set();
     let selectedWeapon = "snowball";
     let pendingFire = null;
@@ -63,6 +70,7 @@
       round: 1,
       over: false,
       winner: null,
+      restartAt: 0,
       players: {},
       snowmen: [],
       projectiles: [],
@@ -156,6 +164,7 @@
       state.round++;
       state.over = false;
       state.winner = null;
+      state.restartAt = 0;
       state.projectiles = [];
       state.items = [];
       state.objects = [];
@@ -303,8 +312,8 @@
       const hitArc = (target) => {
         const dx = target.x - attacker.x, dy = target.y - attacker.y;
         const d = Math.hypot(dx, dy);
-        if (d > 1.15 || d < 0.001) return false;
-        return (dx / d) * attacker.aimX + (dy / d) * attacker.aimY > 0.45;
+        if (d > MELEE_RANGE || d < 0.001) return false;
+        return (dx / d) * attacker.aimX + (dy / d) * attacker.aimY >= Math.cos(MELEE_HALF_ANGLE);
       };
       for (const p of Object.values(state.players)) if (p.id !== attacker.id && p.alive && hitArc(p)) damagePlayer(p, MELEE_DAMAGE, attacker.id);
       for (const s of state.snowmen) if (!s.dead && hitArc(s)) damageSnowman(s, MELEE_DAMAGE, attacker.id);
@@ -495,17 +504,19 @@
 
     function updateTracks() {
       const cutoff = Date.now() - DESPAWN_TRACK_MS;
-      state.tracks = state.tracks.filter((t) => t.t > cutoff).slice(-240);
+      state.tracks = state.tracks.filter((t) => t.t > cutoff).slice(-420);
       state.events = state.events.filter((e) => Date.now() - e.t < 1200).slice(-36);
     }
 
     function checkWinner() {
       const alive = Object.values(state.players).filter((p) => p.alive);
-      if (alive.length <= 1 && Object.keys(state.players).length > 1) {
+      const playerCount = Object.keys(state.players).length;
+      if ((alive.length === 0 || (alive.length === 1 && playerCount > 1)) && playerCount > 0 && !state.over) {
         state.over = true;
-        state.winner = alive[0]?.id || null;
+        state.winner = alive.length === 1 ? alive[0].id : null;
+        state.restartAt = Date.now() + ROUND_RESTART_MS;
         clearTimeout(winnerTimeout);
-        winnerTimeout = setTimeout(() => { if (isHost()) resetHostState(true); }, 8000);
+        winnerTimeout = setTimeout(() => { if (isHost()) resetHostState(true); }, ROUND_RESTART_MS);
         forceFullSnapshot();
       }
     }
@@ -518,10 +529,11 @@
         round: state.round,
         over: state.over,
         winner: state.winner,
+        restartAt: state.restartAt,
         players: state.players,
         snowmen: state.snowmen,
         projectiles: state.projectiles,
-        tracks: state.tracks.slice(-180),
+        tracks: state.tracks.slice(-320),
         events: state.events.slice(-24),
         nextId,
       };
@@ -550,6 +562,7 @@
       state.round = s.round || 1;
       state.over = !!s.over;
       state.winner = s.winner || null;
+      state.restartAt = s.restartAt || 0;
       state.players = s.players || {};
       state.snowmen = s.snowmen || [];
       state.projectiles = s.projectiles || [];
@@ -606,13 +619,25 @@
 
     function updateCamera() {
       const me = state.players[myId];
+      if (isSpectating()) {
+        spectatorCamera = spectatorCamera || { x: me?.x || camera.x, y: me?.y || camera.y };
+        camera.x += (spectatorCamera.x - camera.x) * 0.18;
+        camera.y += (spectatorCamera.y - camera.y) * 0.18;
+        updateCameraScale();
+        return;
+      }
+      spectatorCamera = null;
       let target = me;
       if (!target?.alive) target = Object.values(state.players).find((p) => p.alive) || me;
       if (target) {
         camera.x += (target.x - camera.x) * 0.15;
         camera.y += (target.y - camera.y) * 0.15;
       }
-      camera.scale = Math.max(14, Math.min(25, Math.min(canvas.clientWidth / 22, canvas.clientHeight / 16)));
+      updateCameraScale();
+    }
+
+    function updateCameraScale() {
+      camera.scale = Math.max(canvas.clientWidth / VIEW_W, canvas.clientHeight / VIEW_H);
     }
 
     function sx(x) { return canvas.clientWidth / 2 + (x - camera.x) * camera.scale; }
@@ -634,6 +659,7 @@
       drawActors();
       drawProjectiles();
       drawRoofsAndFog();
+      enforceViewportVision();
       drawHud();
       drawControls();
       drawFreeze();
@@ -695,6 +721,7 @@
     }
 
     function visibleEntity(e) {
+      if (isSpectating()) return true;
       const me = state.players[myId];
       const viewer = me?.alive ? me : (Object.values(state.players).find((p) => p.alive) || me);
       if (!viewer) return true;
@@ -731,11 +758,41 @@
       const me = state.players[myId];
       if (me?.alive && controls.aiming) {
         ctx.save(); ctx.strokeStyle = selectedWeapon === "melee" ? "rgba(255,180,100,0.7)" : "rgba(255,255,255,0.8)"; ctx.lineWidth = 3;
-        ctx.beginPath(); ctx.moveTo(sx(me.x), sy(me.y)); ctx.lineTo(sx(me.x + controls.ax * (selectedWeapon === "melee" ? 1.4 : 5)), sy(me.y + controls.ay * (selectedWeapon === "melee" ? 1.4 : 5))); ctx.stroke(); ctx.restore();
+        if (selectedWeapon === "melee") drawMeleeCone(me.x, me.y, controls.ax, controls.ay);
+        else { ctx.beginPath(); ctx.moveTo(sx(me.x), sy(me.y)); ctx.lineTo(sx(me.x + controls.ax * 5), sy(me.y + controls.ay * 5)); ctx.stroke(); }
+        ctx.restore();
       }
     }
 
+    function enforceViewportVision() {
+      if (isSpectating()) return;
+      const me = state.players[myId];
+      const viewer = me?.alive ? me : (Object.values(state.players).find((p) => p.alive) || me);
+      if (!viewer) return;
+      const range = visionFor(viewer) * camera.scale;
+      const cx = sx(viewer.x), cy = sy(viewer.y);
+      ctx.save();
+      ctx.fillStyle = "rgba(12,18,30,0.94)";
+      ctx.beginPath();
+      ctx.rect(0, 0, canvas.clientWidth, canvas.clientHeight);
+      ctx.arc(cx, cy, range, 0, Math.PI * 2, true);
+      ctx.fill("evenodd");
+      ctx.restore();
+    }
+
+    function drawMeleeCone(x, y, ax, ay) {
+      const a = Math.atan2(ay, ax);
+      ctx.beginPath();
+      ctx.moveTo(sx(x), sy(y));
+      ctx.arc(sx(x), sy(y), MELEE_RANGE * camera.scale, a - MELEE_HALF_ANGLE, a + MELEE_HALF_ANGLE);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(255,180,100,0.20)";
+      ctx.fill();
+      ctx.stroke();
+    }
+
     function drawRoofsAndFog() {
+      if (isSpectating()) return;
       const me = state.players[myId];
       const viewer = me?.alive ? me : (Object.values(state.players).find((p) => p.alive) || me);
       const viewerBuilding = viewer && inBuilding(viewer.x, viewer.y);
@@ -764,7 +821,11 @@
       ctx.fillStyle = "rgba(10,18,30,0.76)"; roundRect(weaponRect.x, weaponRect.y, weaponRect.w, weaponRect.h, 12); ctx.fill();
       drawText(selectedWeapon === "melee" ? "🪓 Shovel" : "⚪ Throw", weaponRect.x + weaponRect.w / 2, weaponRect.y + 18, 13, "#fff");
       if (me && !me.alive) drawText(state.over ? "Round ending…" : "Spectating until the round ends", canvas.clientWidth / 2, canvas.clientHeight * 0.18, 18, "#fff");
-      if (state.over) drawText(state.winner ? `${profile(state.winner).name} wins!` : "No winner", canvas.clientWidth / 2, canvas.clientHeight * 0.25, 24, "#fff");
+      if (state.over) {
+        const left = Math.max(0, Math.ceil(((state.restartAt || Date.now()) - Date.now()) / 1000));
+        drawText(state.winner ? `${profile(state.winner).name} wins!` : "No living players left", canvas.clientWidth / 2, canvas.clientHeight * 0.25, 24, "#fff");
+        drawText(`Restarting in ${left}s`, canvas.clientWidth / 2, canvas.clientHeight * 0.31, 17, "#d8e6ff");
+      }
     }
 
     function drawControls() {
@@ -821,16 +882,58 @@
       if (keys.has("s") || keys.has("arrowdown")) my++;
       if (leftStick) { mx = leftStick.dx; my = leftStick.dy; }
       const d = Math.hypot(mx, my); controls.mx = d > 1 ? mx / d : mx; controls.my = d > 1 ? my / d : my;
+      if (isSpectating()) {
+        spectatorCamera = spectatorCamera || { x: camera.x, y: camera.y };
+        spectatorCamera.x = clamp(spectatorCamera.x + controls.mx * 0.35, 0, MAP_W);
+        spectatorCamera.y = clamp(spectatorCamera.y + controls.my * 0.35, 0, MAP_H);
+      }
       if (rightStick) { controls.ax = rightStick.dx || controls.ax; controls.ay = rightStick.dy || controls.ay; controls.aiming = true; }
       else if (mouseAim.active) { controls.ax = mouseAim.x; controls.ay = mouseAim.y; controls.aiming = true; }
       else controls.aiming = false;
-      if (pendingFire) { pendingFire = null; sendControls(true); }
+      if (pendingFire) {
+        const auto = pendingFire === "auto";
+        pendingFire = null;
+        if (auto) autoTargetAim();
+        sendControls(!isSpectating());
+      }
       else if (now() - lastInputSentAt > 55) { lastInputSentAt = now(); sendControls(false); }
+    }
+
+    function isSpectating() {
+      const me = state.players[myId];
+      return !!me && !me.alive;
+    }
+
+    function autoTargetAim() {
+      const me = state.players[myId];
+      if (!me?.alive) return;
+      const maxRange = selectedWeapon === "melee" ? MELEE_RANGE : SNOWBALL_TARGET_RANGE;
+      let best = null;
+      for (const p of Object.values(state.players)) {
+        if (p.id === myId || !p.alive || !visibleEntity(p)) continue;
+        const d = Math.hypot(p.x - me.x, p.y - me.y);
+        if (d <= maxRange && (!best || d < best.d)) best = { x: p.x, y: p.y, d };
+      }
+      for (const s of state.snowmen) {
+        if (s.dead || !visibleEntity(s)) continue;
+        const d = Math.hypot(s.x - me.x, s.y - me.y);
+        if (d <= maxRange && (!best || d < best.d)) best = { x: s.x, y: s.y, d };
+      }
+      if (!best) return;
+      const dx = best.x - me.x, dy = best.y - me.y, d = Math.hypot(dx, dy) || 1;
+      controls.ax = dx / d;
+      controls.ay = dy / d;
     }
 
     function pointerDown(e) {
       const p = pointerScreen(e);
       if (weaponRect && pointInRect(p.x, p.y, weaponRect)) { selectedWeapon = selectedWeapon === "snowball" ? "melee" : "snowball"; sendControls(false); return; }
+      if (e.pointerType === "mouse") {
+        updateMouseAim(p);
+        mouseAim.down = p;
+        e.preventDefault();
+        return;
+      }
       if (p.x < canvas.clientWidth * 0.46 && !leftStick) leftStick = makeStick(e, p);
       else if (!rightStick) rightStick = makeStick(e, p);
       e.preventDefault();
@@ -846,7 +949,12 @@
 
     function pointerUp(e) {
       const id = e.pointerId ?? "mouse";
-      if (rightStick && rightStick.id === id) pendingFire = true;
+      if (e.pointerType === "mouse") {
+        mouseUp(e);
+        e.preventDefault();
+        return;
+      }
+      if (rightStick && rightStick.id === id) pendingFire = Math.hypot(rightStick.dx, rightStick.dy) < 0.18 ? "auto" : true;
       if (leftStick && leftStick.id === id) leftStick = null;
       if (rightStick && rightStick.id === id) rightStick = null;
       mouseAim.active = false;
@@ -856,8 +964,14 @@
     function updateStick(stick, p) { const dx = p.x - stick.x0, dy = p.y - stick.y0, d = Math.max(1, Math.hypot(dx, dy)), m = Math.min(1, d / 44); stick.dx = dx / d * m; stick.dy = dy / d * m; }
     function pointerScreen(e) { const box = canvas.getBoundingClientRect(); const t = e.touches?.[0] || e.changedTouches?.[0] || e; return { x: t.clientX - box.left, y: t.clientY - box.top, clientX: t.clientX, clientY: t.clientY }; }
     function updateMouseAim(p) { const me = state.players[myId]; if (!me) return; const w = worldPoint(p.clientX, p.clientY); const dx = w.x - me.x, dy = w.y - me.y, d = Math.hypot(dx, dy) || 1; mouseAim = { x: dx / d, y: dy / d, active: true }; }
-    function mouseDown(e) { updateMouseAim(pointerScreen(e)); }
-    function mouseUp() { if (mouseAim.active) pendingFire = true; mouseAim.active = false; }
+    function mouseDown(e) { const p = pointerScreen(e); updateMouseAim(p); mouseAim.down = p; }
+    function mouseUp(e) {
+      const p = e ? pointerScreen(e) : null;
+      if (p && mouseAim.down && Math.hypot(p.x - mouseAim.down.x, p.y - mouseAim.down.y) < 8) pendingFire = "auto";
+      else if (mouseAim.active) pendingFire = true;
+      mouseAim.active = false;
+      mouseAim.down = null;
+    }
     function keyDown(e) { const k = e.key.toLowerCase(); if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(k)) { keys.add(k); e.preventDefault(); } if (k === "q" || k === " ") { selectedWeapon = selectedWeapon === "snowball" ? "melee" : "snowball"; e.preventDefault(); } }
     function keyUp(e) { keys.delete(e.key.toLowerCase()); }
 
@@ -896,8 +1010,10 @@
           canvas.addEventListener("touchmove", pointerMove, { passive: false });
           window.addEventListener("touchend", pointerUp);
         }
-        canvas.addEventListener("mousedown", mouseDown);
-        window.addEventListener("mouseup", mouseUp);
+        if (!pointerMode) {
+          canvas.addEventListener("mousedown", mouseDown);
+          window.addEventListener("mouseup", mouseUp);
+        }
         window.addEventListener("keydown", keyDown);
         window.addEventListener("keyup", keyUp);
         rafId = requestAnimationFrame(loop);
@@ -916,8 +1032,10 @@
           canvas.removeEventListener("touchmove", pointerMove);
           window.removeEventListener("touchend", pointerUp);
         }
-        canvas.removeEventListener("mousedown", mouseDown);
-        window.removeEventListener("mouseup", mouseUp);
+        if (!pointerMode) {
+          canvas.removeEventListener("mousedown", mouseDown);
+          window.removeEventListener("mouseup", mouseUp);
+        }
         window.removeEventListener("keydown", keyDown);
         window.removeEventListener("keyup", keyUp);
       },
