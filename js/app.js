@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.5.16";
+const APP_VERSION = "2.5.17";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
@@ -1697,7 +1697,8 @@ function loadGameScript(game) {
   if (loadingGameScripts.has(game)) return loadingGameScripts.get(game);
   const promise = new Promise((resolve) => {
     const script = document.createElement("script");
-    script.src = `${src}?v=${encodeURIComponent(APP_VERSION)}`;
+    const separator = src.includes("?") ? "&" : "?";
+    script.src = `${src}${separator}v=${encodeURIComponent(APP_VERSION)}`;
     script.onload = () => resolve(!!window.BP2PGames?.[game]);
     script.onerror = () => resolve(false);
     document.head.appendChild(script);
