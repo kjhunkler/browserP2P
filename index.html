@@ -8,7 +8,7 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/robot.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icons/robot.svg" />
-  <link rel="stylesheet" href="css/style.css?v=2.6.1" />
+  <link rel="stylesheet" href="css/style.css?v=2.6.2" />
 </head>
 <body>
   <div id="app">
@@ -23,11 +23,10 @@
       <div class="code-card">
         <div class="code-card-title">Join / host with code</div>
         <div class="join-row">
-          <input id="code-input" class="code-input" maxlength="12" autocapitalize="characters"
+          <input id="code-input" class="code-input" maxlength="4" autocapitalize="characters"
                  autocomplete="off" placeholder="CODE" inputmode="text" />
-          <button id="btn-join" class="btn">Join</button>
+          <button id="btn-code-action" class="btn btn-primary">Join / Host</button>
         </div>
-        <button id="btn-host" class="btn btn-primary">Host with this code</button>
         <p id="join-status" class="status"></p>
       </div>
 
@@ -165,7 +164,7 @@
       <div class="field-group app-update-group">
           <label>Lobby</label>
           <div class="join-row settings-code-row">
-              <input id="settings-code-input" class="code-input" maxlength="12" autocapitalize="characters"
+              <input id="settings-code-input" class="code-input" maxlength="4" autocapitalize="characters"
                      autocomplete="off" placeholder="CODE" inputmode="text" />
               <button id="btn-settings-join" class="btn btn-small" type="button">Join</button>
               <button id="btn-settings-host" class="btn btn-small btn-primary" type="button">Host</button>
@@ -194,7 +193,7 @@
       <div class="field-group app-update-group">
           <label>App</label>
           <div class="version-row">
-              <span>Version <strong id="app-version">2.6.1</strong></span>
+              <span>Version <strong id="app-version">2.6.2</strong></span>
               <button id="btn-check-update" class="btn btn-small" type="button">Check for updates</button>
           </div>
           <p id="update-status" class="status"></p>
@@ -225,13 +224,13 @@
   <!-- QR code rendering for the join link -->
   <script src="https://cdn.jsdelivr.net/gh/davidshimjs/qrcodejs/qrcode.min.js"></script>
 
-  <script src="js/peer-net.js?v=2.6.1"></script>
-  <script src="js/games/digger.js?v=2.6.1"></script>
-  <script src="js/games/air-hockey.js?v=2.6.1"></script>
-  <script src="js/games/paint-panic.js?v=2.6.1"></script>
-  <script src="js/games/tower.js?v=2.6.1"></script>
-  <script src="js/games/snow-brawl.js?v=2.6.1"></script>
-  <script src="js/games/gentle-rain.js?v=2.6.1"></script>
-  <script src="js/app.js?v=2.6.1"></script>
+  <script src="js/peer-net.js?v=2.6.2"></script>
+  <script src="js/games/digger.js?v=2.6.2"></script>
+  <script src="js/games/air-hockey.js?v=2.6.2"></script>
+  <script src="js/games/paint-panic.js?v=2.6.2"></script>
+  <script src="js/games/tower.js?v=2.6.2"></script>
+  <script src="js/games/snow-brawl.js?v=2.6.2"></script>
+  <script src="js/games/gentle-rain.js?v=2.6.2"></script>
+  <script src="js/app.js?v=2.6.2"></script>
 </body>
 </html>

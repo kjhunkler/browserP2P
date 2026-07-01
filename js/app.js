@@ -43,12 +43,13 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.6.1";
+const APP_VERSION = "2.6.2";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
 const RESTORE_PLAY_KEY = "bp2p-restore-play";
 const CURRENT_LOBBY_KEY = "bp2p-current-lobby";
+const LAST_CODE_KEY = "bp2p-last-code";
 
 const ELEMENTAL_LOBBIES = [
   { id: "FIRE", name: "Fire", icon: "🔥" },
@@ -378,6 +379,20 @@ function addPlayer(id, name, peerId, icon, preferredColor) {
 
 function lobbyDisplayName(code) {
   return ELEMENTAL_LOBBIES.find((l) => l.id === code)?.name || code || "Custom";
+}
+
+function randomLobbyCode() {
+  return String(Math.floor(1000 + Math.random() * 9000));
+}
+
+function rememberLobbyCode(code) {
+  code = sanitizeLobbyCode(code);
+  if (code) localStorage.setItem(LAST_CODE_KEY, code);
+}
+
+function preferredLobbyCode() {
+  const stored = sanitizeLobbyCode(localStorage.getItem(LAST_CODE_KEY));
+  return stored.length === 4 ? stored : randomLobbyCode();
 }
 
 function saveCurrentLobby(code, role) {
@@ -2492,7 +2507,8 @@ function resetNetworkForLobby() {
 
 function hostCode(code) {
   code = sanitizeLobbyCode(code);
-  if (!code) { setStatus("Enter a code to host."); return; }
+  if (code.length !== 4) { setStatus("Enter a 4-character code."); return; }
+  rememberLobbyCode(code);
   resetNetworkForLobby();
   autoMode = false;
   hasLeftLobby = false;
@@ -2508,10 +2524,27 @@ function hostCode(code) {
 
 function joinLobbyCode(code) {
   code = sanitizeLobbyCode(code);
-  if (!code) { setStatus("Enter a code to join."); return; }
+  if (code.length !== 4) { setStatus("Enter a 4-character code."); return; }
+  rememberLobbyCode(code);
   resetNetworkForLobby();
   playStarted = false;
   joinCode(code);
+}
+
+async function joinOrHostCode(code) {
+  code = sanitizeLobbyCode(code);
+  if (code.length !== 4) { setStatus("Enter a 4-character code."); return; }
+  rememberLobbyCode(code);
+  const btn = $("#btn-code-action");
+  if (btn) btn.disabled = true;
+  setStatus("Checking " + code + "…");
+  try {
+    const status = await PeerNet.probe(code, 1400);
+    if (status.online) joinLobbyCode(code);
+    else hostCode(code);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 function buildColorPicker() {
@@ -2634,7 +2667,7 @@ function renderLobby() {
 }
 
 function sanitizeLobbyCode(code) {
-  return String(code || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 12);
+  return String(code || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
 }
 
 function buildLobbyCards() {
@@ -2652,11 +2685,13 @@ function buildLobbyCards() {
         <div class="lobby-meta">Checking for a host…</div>
       </div>
       <div class="lobby-actions">
-        <button class="btn btn-primary" data-action="join" type="button">Join</button>
-        <button class="btn" data-action="host" type="button">Host</button>
+        <button class="btn lobby-action-btn" data-action="auto" type="button">Checking…</button>
       </div>`;
-    card.querySelector('[data-action="join"]').addEventListener("click", () => joinLobbyCode(lobby.id));
-    card.querySelector('[data-action="host"]').addEventListener("click", () => hostCode(lobby.id));
+    card.querySelector('[data-action="auto"]').addEventListener("click", () => {
+      const status = lobbyStatuses.get(lobby.id);
+      if (status?.online) joinLobbyCode(lobby.id);
+      else hostCode(lobby.id);
+    });
     grid.appendChild(card);
   }
 }
@@ -2667,20 +2702,22 @@ function renderLobbyCards() {
     if (!card) continue;
     const status = lobbyStatuses.get(lobby.id);
     const meta = card.querySelector(".lobby-meta");
-    const joinBtn = card.querySelector('[data-action="join"]');
-    const hostBtn = card.querySelector('[data-action="host"]');
+    const actionBtn = card.querySelector('[data-action="auto"]');
     if (!status) {
       meta.textContent = "Checking for a host…";
-      joinBtn.disabled = true;
-      hostBtn.disabled = true;
+      actionBtn.textContent = "Checking…";
+      actionBtn.disabled = true;
+      actionBtn.className = "btn lobby-action-btn";
     } else if (status.online) {
       meta.textContent = `${status.info?.name || "Someone"} is hosting · v${status.info?.version || "?"} · ${status.info?.players || 1} player${(status.info?.players || 1) === 1 ? "" : "s"}`;
-      joinBtn.disabled = false;
-      hostBtn.disabled = true;
+      actionBtn.textContent = "Join";
+      actionBtn.disabled = false;
+      actionBtn.className = "btn lobby-action-btn join";
     } else {
       meta.textContent = "Open lobby · become the host";
-      joinBtn.disabled = true;
-      hostBtn.disabled = false;
+      actionBtn.textContent = "Host";
+      actionBtn.disabled = false;
+      actionBtn.className = "btn lobby-action-btn host";
     }
   }
 }
@@ -2977,13 +3014,7 @@ function render() {
   requestAnimationFrame(render);
 }
 
-$("#btn-host").addEventListener("click", () => {
-  hostCode($("#code-input").value || makeCode());
-});
-
-$("#btn-join").addEventListener("click", () => {
-  joinLobbyCode($("#code-input").value);
-});
+$("#btn-code-action")?.addEventListener("click", () => joinOrHostCode($("#code-input").value));
 
 $("#btn-refresh-lobbies")?.addEventListener("click", refreshLobbyCards);
 
@@ -3020,7 +3051,12 @@ syncDndUi();
 // Auto-join from QR link (?join=CODE).
 const joinParam = new URLSearchParams(location.search).get("join");
 const autoJoinCode = joinParam?.trim().toUpperCase();
-if (autoJoinCode) $("#code-input").value = autoJoinCode;
+const initialCode = sanitizeLobbyCode(autoJoinCode) || preferredLobbyCode();
+if ($("#code-input")) $("#code-input").value = initialCode;
+$("#code-input")?.addEventListener("input", (e) => {
+  e.target.value = sanitizeLobbyCode(e.target.value);
+  if (e.target.value.length === 4) rememberLobbyCode(e.target.value);
+});
 
 // ============================================================ PROFILE ACTIONS
 $("#btn-profile").addEventListener("click", openProfileSheet);
@@ -3032,7 +3068,7 @@ $("#app-version").textContent = APP_VERSION;
 $("#btn-check-update").addEventListener("click", checkForUpdates);
 $("#btn-leave-lobby").addEventListener("click", leaveLobby);
 $("#btn-settings-join")?.addEventListener("click", () => joinLobbyCode($("#settings-code-input").value));
-$("#btn-settings-host")?.addEventListener("click", () => hostCode($("#settings-code-input").value || makeCode()));
+$("#btn-settings-host")?.addEventListener("click", () => hostCode($("#settings-code-input").value || preferredLobbyCode()));
 $("#btn-share-lobby")?.addEventListener("click", async () => {
   const code = currentLobby?.code || net.code;
   if (!code) { $("#settings-lobby-status").textContent = "You are not in a lobby."; return; }

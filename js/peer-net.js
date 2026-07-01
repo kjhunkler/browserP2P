@@ -228,6 +228,7 @@ class PeerNet {
           if (data?.t === INTERNAL && data.kind === "lobby-info") finish({ online: true, info: data.info || {}, code: data.code || code });
         });
         conn.on("close", () => finish({ online: false }));
+        conn.on("error", () => finish({ online: false }));
       });
       peer.on("error", () => finish({ online: false }));
     });

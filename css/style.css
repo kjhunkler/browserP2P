@@ -149,8 +149,9 @@ input, textarea, select {
 .lobby-name { font-size: 1.45rem; font-weight: 900; letter-spacing: -0.02em; }
 .lobby-meta { font-size: 0.78rem; opacity: 0.88; line-height: 1.35; }
 .lobby-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.lobby-actions .btn { padding: 10px 12px; font-size: 0.85rem; border-radius: 12px; background: rgba(255,255,255,0.18); color: inherit; backdrop-filter: blur(8px); }
-.lobby-actions .btn-primary { background: rgba(124,252,155,0.92); color: #06210f; }
+.lobby-actions .btn { width: 100%; padding: 11px 12px; font-size: 0.9rem; border-radius: 12px; backdrop-filter: blur(8px); }
+.lobby-action-btn.join { background: rgba(77,210,255,0.92); color: #061621; }
+.lobby-action-btn.host { background: rgba(124,252,155,0.92); color: #06210f; }
 .lobby-pill { align-self: flex-start; padding: 4px 8px; border-radius: 999px; background: rgba(0,0,0,0.25); font-size: 0.68rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; }
 
 /* ===== Lobby ===== */
@@ -167,9 +168,10 @@ input, textarea, select {
 .online-dropdown {
   position: fixed;
   top: max(12px, env(safe-area-inset-top));
-  right: 12px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 160;
-  width: min(320px, calc(100vw - 24px));
+  width: min(192px, calc(100vw - 24px));
 }
 .online-dropdown summary {
   list-style: none;
