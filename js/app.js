@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.5.12";
+const APP_VERSION = "2.5.14";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
@@ -488,6 +488,7 @@ function handleHostMsg(peerId, msg) {
     net.sendTo(peerId, { t: "welcome", color: p.color });
     net.sendTo(peerId, { t: "history", chatLog });
     net.sendTo(peerId, { t: "drawing", strokes: drawingStrokes });
+    net.sendTo(peerId, { t: "dnd-state", state: dndSharedState });
     net.sendTo(peerId, { t: "game-mode", game: selectedGame });
     queueGameStateForPeer(peerId);
     if (playStarted || screens.play.classList.contains("active")) net.sendTo(peerId, { t: "play" });
@@ -561,6 +562,14 @@ function markPeerDisconnected(peerId) {
     for (const [targetPeerId, conn] of net.conns) {
       if (targetPeerId !== peerId && conn.open) conn.send({ t: "draw", stroke: msg.stroke });
     }
+
+  } else if (msg.t === "dnd-action") {
+    const id = peerMap.get(peerId);
+    applyDndAction(msg.action, id || MY_ID, true);
+
+  } else if (msg.t === "dnd-roll") {
+    const id = peerMap.get(peerId);
+    if (id) rollDiceForPlayer(id, msg.formula);
 
   } else if (msg.t === "draw-clear") {
     clearDrawing(false);
@@ -667,6 +676,12 @@ function handleClientMsg(msg) {
 
   } else if (msg.t === "draw") {
     addDrawingStroke(msg.stroke, false);
+
+  } else if (msg.t === "dnd-state") {
+    replaceDndState(msg.state);
+
+  } else if (msg.t === "dnd-roll") {
+    showDiceRoll(msg.roll);
 
   } else if (msg.t === "draw-clear") {
     clearDrawing(false);
@@ -822,6 +837,271 @@ let drawing = false;
 let currentStroke = null;
 const drawingRedoStack = [];
 
+// ============================================================ DND BOARD ======
+const DND_STATE_KEY = "bp2p-dnd-board";
+const DND_LIBRARY_KEY = "bp2p-dnd-assets";
+const DND_GRID_FT = 5;
+const DND_CELL_PX = 48;
+const DND_ZOOM_KEY = "bp2p-dnd-zoom";
+const DND_ASSETS = [
+  { id: "hero", name: "Hero", icon: "🧙", color: "#4dd2ff", w: 1, h: 1 },
+  { id: "fighter", name: "Fighter", icon: "🛡️", color: "#7cfc9b", w: 1, h: 1 },
+  { id: "rogue", name: "Rogue", icon: "🗡️", color: "#ffd24d", w: 1, h: 1 },
+  { id: "goblin", name: "Goblin", icon: "👺", color: "#7CFC9B", w: 1, h: 1 },
+  { id: "orc", name: "Orc", icon: "🪓", color: "#22cc88", w: 1, h: 1 },
+  { id: "skeleton", name: "Skeleton", icon: "💀", color: "#c8c8d8", w: 1, h: 1 },
+  { id: "dragon", name: "Dragon Boss", icon: "🐉", color: "#ff5d5d", w: 3, h: 3 },
+  { id: "lich", name: "Lich Boss", icon: "🧟", color: "#aa44ff", w: 2, h: 2 },
+  { id: "chest", name: "Treasure Chest", icon: "🧰", color: "#ffbb33", w: 1, h: 1 },
+  { id: "wall", name: "Wall", icon: "🧱", color: "#77778d", w: 2, h: 1 },
+  { id: "tree", name: "Tree", icon: "🌲", color: "#22aa66", w: 1, h: 1 },
+  { id: "rock", name: "Rock", icon: "🪨", color: "#9090a8", w: 1, h: 1 },
+];
+const DND_SCENES = [
+  { id: "blank", name: "Blank Board", bg: "#182033", board: { cols: 24, rows: 18 }, assets: [] },
+  { id: "tavern", name: "Tavern Ambush", bg: "#3a2418", board: { cols: 24, rows: 18 }, assets: [
+    ["wall", "North Bar", 5, 3, 5, 1], ["wall", "Long Table", 9, 8, 4, 1], ["wall", "Long Table", 15, 8, 4, 1],
+    ["goblin", "Goblin Sneak", 10, 10, 1, 1], ["orc", "Orc Captain", 18, 5, 1, 1], ["chest", "Locked Chest", 4, 14, 1, 1],
+  ] },
+  { id: "dungeon", name: "Dungeon Boss Room", bg: "#1b1b24", board: { cols: 28, rows: 20 }, assets: [
+    ["wall", "Stone Pillar", 5, 5, 1, 2], ["wall", "Stone Pillar", 21, 5, 1, 2], ["wall", "Altar", 13, 3, 2, 1],
+    ["skeleton", "Skeleton Guard", 8, 12, 1, 1], ["skeleton", "Skeleton Guard", 19, 12, 1, 1], ["lich", "The Lich", 14, 10, 2, 2],
+  ] },
+  { id: "forest", name: "Forest Dragon", bg: "#133020", board: { cols: 30, rows: 22 }, assets: [
+    ["tree", "Ancient Pine", 5, 4, 1, 1], ["tree", "Ancient Pine", 8, 16, 1, 1], ["tree", "Ancient Pine", 24, 7, 1, 1],
+    ["rock", "Boulder", 12, 12, 2, 1], ["goblin", "Scout", 18, 15, 1, 1], ["dragon", "Emberclaw", 22, 11, 3, 3],
+  ] },
+];
+
+function defaultDndState() {
+  return { grid: false, board: { cols: 24, rows: 18 }, bg: "#182033", assets: [] };
+}
+
+function loadDndState() {
+  try { return { ...defaultDndState(), ...(JSON.parse(localStorage.getItem(DND_STATE_KEY) || "null") || {}) }; }
+  catch { return defaultDndState(); }
+}
+
+function saveDndState() {
+  try { localStorage.setItem(DND_STATE_KEY, JSON.stringify(dndSharedState)); } catch {}
+}
+
+function loadDndLibrary() {
+  try { return JSON.parse(localStorage.getItem(DND_LIBRARY_KEY) || "[]"); } catch { return []; }
+}
+
+function saveDndLibrary() {
+  try { localStorage.setItem(DND_LIBRARY_KEY, JSON.stringify(dndLocalLibrary)); } catch {}
+}
+
+let dndSharedState = loadDndState();
+let dndLocalLibrary = loadDndLibrary();
+let dndOpen = false;
+let dndSelectedId = null;
+let dndDrag = null;
+let dndHoverName = "";
+let dndZoom = Math.max(0.55, Math.min(2.25, Number(localStorage.getItem(DND_ZOOM_KEY) || 1)));
+let activeDiceRoll = null;
+
+function dndAssetCatalog() {
+  return [...DND_ASSETS, ...dndLocalLibrary];
+}
+
+function dndAssetById(id) {
+  return dndAssetCatalog().find((a) => a.id === id) || DND_ASSETS[0];
+}
+
+function dndBoardMetrics(rect) {
+  const board = dndSharedState.board || defaultDndState().board;
+  const cell = DND_CELL_PX * dndZoom;
+  const w = board.cols * cell;
+  const h = board.rows * cell;
+  return { board, cell, w, h, ox: (rect.width - w) / 2, oy: (rect.height - h) / 2 };
+}
+
+function pointerToBoard(e) {
+  const rect = canvas.getBoundingClientRect();
+  const src = e.touches ? e.touches[0] : e;
+  const metrics = dndBoardMetrics(rect);
+  return {
+    x: (src.clientX - rect.left - metrics.ox) / metrics.cell,
+    y: (src.clientY - rect.top - metrics.oy) / metrics.cell,
+    metrics,
+  };
+}
+
+function dndAssetAt(point) {
+  for (let i = dndSharedState.assets.length - 1; i >= 0; i--) {
+    const asset = dndSharedState.assets[i];
+    if (point.x >= asset.x && point.x <= asset.x + asset.w && point.y >= asset.y && point.y <= asset.y + asset.h) return asset;
+  }
+  return null;
+}
+
+function sendDndAction(action) {
+  if (net.isHost) applyDndAction(action, MY_ID, true);
+  else net.send({ t: "dnd-action", action });
+}
+
+function replaceDndState(state) {
+  dndSharedState = { ...defaultDndState(), ...(state || {}) };
+  dndSelectedId = dndSharedState.assets.some((a) => a.id === dndSelectedId) ? dndSelectedId : null;
+  saveDndState();
+  syncDndUi();
+}
+
+function applyDndAction(action, actorId = MY_ID, broadcast = true) {
+  if (!action) return;
+  if (action.type === "state") {
+    replaceDndState(action.state);
+  } else if (action.type === "add") {
+    dndSharedState.assets.push({ ...action.asset, ownerId: actorId });
+    dndSelectedId = action.asset.id;
+  } else if (action.type === "move") {
+    const asset = dndSharedState.assets.find((a) => a.id === action.id);
+    if (asset) { asset.x = action.x; asset.y = action.y; }
+  } else if (action.type === "resize") {
+    const asset = dndSharedState.assets.find((a) => a.id === action.id);
+    if (asset) { asset.w = action.w; asset.h = action.h; }
+  } else if (action.type === "select") {
+    dndSelectedId = action.id;
+  } else if (action.type === "grid") {
+    dndSharedState.grid = !!action.grid;
+  } else if (action.type === "board") {
+    dndSharedState.board = action.board;
+  }
+  saveDndState();
+  syncDndUi();
+  if (broadcast && net.isHost) net.broadcast({ t: "dnd-state", state: dndSharedState });
+}
+
+function sceneToState(scene) {
+  const catalog = dndAssetCatalog();
+  const assets = scene.assets.map(([assetId, name, x, y, w, h], index) => {
+    const base = catalog.find((a) => a.id === assetId) || DND_ASSETS[0];
+    return { ...base, id: `scene-${scene.id}-${index}-${Date.now()}`, name, x, y, w, h };
+  });
+  return { grid: true, board: scene.board, bg: scene.bg, assets };
+}
+
+function setDndScene(sceneId) {
+  const scene = DND_SCENES.find((s) => s.id === sceneId);
+  if (!scene) return;
+  if (dndSharedState.assets.length && !confirm("Replace the current board with this scene?")) return;
+  sendDndAction({ type: "state", state: sceneToState(scene) });
+}
+
+function addSelectedDndAsset() {
+  const selected = $("#dnd-asset")?.value || DND_ASSETS[0].id;
+  const base = dndAssetById(selected);
+  const board = dndSharedState.board || defaultDndState().board;
+  const asset = {
+    ...base,
+    id: `${MY_ID}-${Date.now()}`,
+    x: Math.max(0, Math.floor((board.cols - base.w) / 2)),
+    y: Math.max(0, Math.floor((board.rows - base.h) / 2)),
+    w: base.w || 1,
+    h: base.h || 1,
+  };
+  sendDndAction({ type: "add", asset });
+}
+
+function createCustomDndAsset() {
+  const name = prompt("Asset name", "Custom Token")?.trim();
+  if (!name) return;
+  const icon = prompt("Emoji or short label", "⭐")?.trim() || "⭐";
+  const color = prompt("Color", "#4dd2ff")?.trim() || "#4dd2ff";
+  const asset = { id: `local-${Date.now()}`, name, icon: icon.slice(0, 4), color, w: 1, h: 1, local: true };
+  dndLocalLibrary.push(asset);
+  saveDndLibrary();
+  syncDndUi();
+}
+
+function saveSelectedAssetToLibrary() {
+  const asset = dndSharedState.assets.find((a) => a.id === dndSelectedId);
+  if (!asset) return;
+  const name = prompt("Save asset as", asset.name || "Asset")?.trim();
+  if (!name) return;
+  const saved = { id: `local-${Date.now()}`, name, icon: asset.icon, color: asset.color, w: asset.w, h: asset.h, local: true };
+  dndLocalLibrary.push(saved);
+  saveDndLibrary();
+  syncDndUi();
+}
+
+function resizeSelectedDndAsset(delta) {
+  const asset = dndSharedState.assets.find((a) => a.id === dndSelectedId);
+  if (!asset) return;
+  const board = dndSharedState.board || defaultDndState().board;
+  const w = Math.max(0.5, Math.min(board.cols, asset.w + delta));
+  const h = Math.max(0.5, Math.min(board.rows, asset.h + delta));
+  sendDndAction({ type: "resize", id: asset.id, w, h });
+}
+
+function setDndBoardSize() {
+  const board = dndSharedState.board || defaultDndState().board;
+  const cols = Math.max(8, Math.min(80, Number(prompt("Board width in 5 ft squares", board.cols)) || board.cols));
+  const rows = Math.max(8, Math.min(80, Number(prompt("Board height in 5 ft squares", board.rows)) || board.rows));
+  sendDndAction({ type: "board", board: { cols, rows } });
+}
+
+function setDndZoom(next) {
+  dndZoom = Math.max(0.55, Math.min(2.25, next));
+  localStorage.setItem(DND_ZOOM_KEY, String(dndZoom));
+}
+
+function syncDndUi() {
+  $("#btn-dnd")?.classList.toggle("active", dndOpen);
+  $("#dnd-dock")?.classList.toggle("hidden", selectedGame !== "free-play");
+  $("#dnd-toolbar")?.classList.toggle("hidden", !dndOpen);
+  $("#btn-dnd-grid")?.classList.toggle("active", !!dndSharedState.grid);
+  const scene = $("#dnd-scene");
+  if (scene && !scene.options.length) {
+    for (const s of DND_SCENES) scene.add(new Option(s.name, s.id));
+  }
+  const assetSelect = $("#dnd-asset");
+  if (assetSelect) {
+    const current = assetSelect.value;
+    assetSelect.innerHTML = "";
+    for (const a of dndAssetCatalog()) assetSelect.add(new Option(a.local ? `★ ${a.name}` : a.name, a.id));
+    if (current) assetSelect.value = current;
+  }
+}
+
+function parseDice(formula) {
+  const match = String(formula || "1d20").toLowerCase().match(/^(\d{1,2})d(\d{1,3})$/);
+  const count = Math.max(1, Math.min(20, Number(match?.[1] || 1)));
+  const sides = Math.max(2, Math.min(100, Number(match?.[2] || 20)));
+  return { count, sides, formula: `${count}d${sides}` };
+}
+
+function rollDiceForPlayer(playerId, formula) {
+  const dice = parseDice(formula);
+  const rolls = Array.from({ length: dice.count }, () => 1 + Math.floor(Math.random() * dice.sides));
+  const total = rolls.reduce((sum, v) => sum + v, 0);
+  const roll = { id: `roll-${Date.now()}-${Math.random().toString(36).slice(2)}`, fromId: playerId, formula: dice.formula, rolls, total, ts: Date.now() };
+  const pf = profiles.get(playerId) || { name: "Someone" };
+  const detail = rolls.length > 1 ? ` (${rolls.join(" + ")})` : "";
+  const text = `🎲 ${pf.name} rolled ${dice.formula}: ${total}${detail}`;
+  chatLog.push({ fromId: playerId, text, ts: roll.ts });
+  saveChatLog();
+  renderChat();
+  showDiceRoll(roll);
+  if (net.isHost) {
+    net.broadcast({ t: "chat", fromId: playerId, text, ts: roll.ts });
+    net.broadcast({ t: "dnd-roll", roll });
+  }
+}
+
+function requestDiceRoll() {
+  const formula = $("#dnd-dice")?.value || "1d20";
+  if (net.isHost) rollDiceForPlayer(MY_ID, formula);
+  else net.send({ t: "dnd-roll", formula });
+}
+
+function showDiceRoll(roll) {
+  activeDiceRoll = { ...roll, start: performance.now(), duration: 1400 };
+}
+
 // ============================================================ CANVAS ========
 const canvas = $("#stage");
 const ctx    = canvas.getContext("2d");
@@ -939,6 +1219,115 @@ function renderDrawing(rect) {
   if (currentStroke) drawStroke(currentStroke, rect);
 }
 
+function renderDndBoard(rect) {
+  const m = dndBoardMetrics(rect);
+  ctx.save();
+  ctx.fillStyle = dndSharedState.bg || "#182033";
+  ctx.fillRect(m.ox, m.oy, m.w, m.h);
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(m.ox, m.oy, m.w, m.h);
+
+  if (dndSharedState.grid) {
+    ctx.strokeStyle = "rgba(255,255,255,0.16)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let c = 0; c <= m.board.cols; c++) {
+      const x = m.ox + c * m.cell;
+      ctx.moveTo(x, m.oy);
+      ctx.lineTo(x, m.oy + m.h);
+    }
+    for (let r = 0; r <= m.board.rows; r++) {
+      const y = m.oy + r * m.cell;
+      ctx.moveTo(m.ox, y);
+      ctx.lineTo(m.ox + m.w, y);
+    }
+    ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,0.5)";
+    ctx.font = "700 11px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(`${DND_GRID_FT} ft`, m.ox + 6, m.oy + 6);
+  }
+
+  for (const asset of dndSharedState.assets) drawDndAsset(asset, m);
+  if (dndHoverName) {
+    ctx.fillStyle = "rgba(0,0,0,0.72)";
+    ctx.fillRect(12, rect.height - 46, Math.min(280, 24 + dndHoverName.length * 8), 30);
+    ctx.fillStyle = "#fff";
+    ctx.font = "700 14px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(dndHoverName, 24, rect.height - 31);
+  }
+  ctx.restore();
+}
+
+function drawDndAsset(asset, m) {
+  const x = m.ox + asset.x * m.cell;
+  const y = m.oy + asset.y * m.cell;
+  const w = asset.w * m.cell;
+  const h = asset.h * m.cell;
+  const selected = asset.id === dndSelectedId;
+  ctx.save();
+  ctx.fillStyle = asset.color || "#4dd2ff";
+  ctx.globalAlpha = 0.88;
+  roundRect(ctx, x + 3, y + 3, Math.max(8, w - 6), Math.max(8, h - 6), Math.min(14, m.cell * 0.22));
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = selected ? "#fff" : "rgba(0,0,0,0.45)";
+  ctx.lineWidth = selected ? 4 : 2;
+  ctx.stroke();
+  ctx.font = `${Math.max(20, Math.min(54, Math.min(w, h) * 0.45))}px serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#fff";
+  ctx.fillText(asset.icon || "●", x + w / 2, y + h / 2);
+  ctx.restore();
+}
+
+function renderDiceOverlay(rect) {
+  if (!activeDiceRoll) return;
+  const elapsed = performance.now() - activeDiceRoll.start;
+  if (elapsed > activeDiceRoll.duration + 900) {
+    activeDiceRoll = null;
+    return;
+  }
+  const rolling = elapsed < activeDiceRoll.duration;
+  const pf = profiles.get(activeDiceRoll.fromId) || { name: "Someone", color: "#4dd2ff" };
+  const spin = rolling ? Math.floor(elapsed / 85) % activeDiceRoll.rolls.length : -1;
+  const shown = rolling
+    ? activeDiceRoll.rolls.map((v, i) => i === spin ? 1 + Math.floor(Math.random() * parseDice(activeDiceRoll.formula).sides) : v)
+    : activeDiceRoll.rolls;
+  ctx.save();
+  ctx.translate(rect.width / 2, Math.max(120, rect.height * 0.22));
+  ctx.fillStyle = "rgba(0,0,0,0.72)";
+  roundRect(ctx, -150, -58, 300, 116, 24);
+  ctx.fill();
+  ctx.strokeStyle = pf.color || "#4dd2ff";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.fillStyle = "#eef0ff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = "800 19px system-ui, sans-serif";
+  ctx.fillText(`${pf.name} rolls ${activeDiceRoll.formula}`, 0, -26);
+  ctx.font = rolling ? "900 34px system-ui, sans-serif" : "900 42px system-ui, sans-serif";
+  ctx.fillText(rolling ? shown.join(" + ") : String(activeDiceRoll.total), 0, 18);
+  ctx.restore();
+}
+
+function roundRect(context, x, y, w, h, r) {
+  const radius = Math.min(r, w / 2, h / 2);
+  context.beginPath();
+  context.moveTo(x + radius, y);
+  context.arcTo(x + w, y, x + w, y + h, radius);
+  context.arcTo(x + w, y + h, x, y + h, radius);
+  context.arcTo(x, y + h, x, y, radius);
+  context.arcTo(x, y, x + w, y, radius);
+  context.closePath();
+}
+
 function setDrawMode(enabled) {
   if (selectedGame !== "free-play") enabled = false;
   drawMode = enabled;
@@ -946,6 +1335,11 @@ function setDrawMode(enabled) {
   $("#draw-dock")?.classList.toggle("hidden", selectedGame !== "free-play");
   $("#draw-toolbar")?.classList.toggle("hidden", !drawMode);
   syncDrawToolUi();
+}
+
+function setDndOpen(enabled) {
+  dndOpen = selectedGame === "free-play" && enabled;
+  syncDndUi();
 }
 
 function setDrawTool(tool) {
@@ -1087,6 +1481,7 @@ async function setGameMode(game, broadcast = true, restoredState = undefined, pr
   if (select && select.value !== selectedGame) select.value = selectedGame;
   if (selectedGame !== "free-play") setDrawMode(false);
   else enterFreePlayMode();
+  if (selectedGame !== "free-play") setDndOpen(false);
   const initialState = restoredState !== undefined
     ? restoredState
     : (promptHost && net.isHost ? promptForSavedGame(selectedGame) : savedGameStateOrNull(selectedGame));
@@ -1218,6 +1613,7 @@ function enterFreePlayMode() {
   currentStroke = null;
   dragging = false;
   setDrawMode(false);
+  syncDndUi();
   syncCanvasSize();
   renderFreePlayFrame();
 }
@@ -2025,6 +2421,18 @@ function onDown(e) {
   if (selectedGame !== "free-play") return;
   // Don't drag when a sheet or chat panel is open.
   if (profileOpen || chatOpen) return;
+  const boardPoint = pointerToBoard(e);
+  const asset = dndAssetAt(boardPoint);
+  if (asset && !drawMode) {
+    e.preventDefault();
+    dndSelectedId = asset.id;
+    const index = dndSharedState.assets.indexOf(asset);
+    dndSharedState.assets.splice(index, 1);
+    dndSharedState.assets.push(asset);
+    dndDrag = { id: asset.id, dx: boardPoint.x - asset.x, dy: boardPoint.y - asset.y };
+    sendDndAction({ type: "select", id: asset.id });
+    return;
+  }
   if (drawMode) {
     e.preventDefault();
     drawing = true;
@@ -2050,6 +2458,19 @@ function onDown(e) {
 }
 function onMove(e) {
   if (selectedGame !== "free-play") return;
+  if (dndDrag) {
+    e.preventDefault();
+    const point = pointerToBoard(e);
+    const asset = dndSharedState.assets.find((a) => a.id === dndDrag.id);
+    const board = dndSharedState.board || defaultDndState().board;
+    if (asset) {
+      asset.x = Math.max(0, Math.min(board.cols - asset.w, Math.round((point.x - dndDrag.dx) * 2) / 2));
+      asset.y = Math.max(0, Math.min(board.rows - asset.h, Math.round((point.y - dndDrag.dy) * 2) / 2));
+    }
+    return;
+  }
+  const hover = dndAssetAt(pointerToBoard(e));
+  dndHoverName = hover?.name || "";
   if (drawing && currentStroke) {
     e.preventDefault();
     const point = pointerToNorm(e);
@@ -2068,6 +2489,11 @@ function onMove(e) {
   }
 }
 function onUp() {
+  if (dndDrag) {
+    const asset = dndSharedState.assets.find((a) => a.id === dndDrag.id);
+    if (asset) sendDndAction({ type: "move", id: asset.id, x: asset.x, y: asset.y });
+  }
+  dndDrag = null;
   if (drawing && currentStroke) addDrawingStroke(currentStroke);
   drawing = false;
   currentStroke = null;
@@ -2085,6 +2511,7 @@ window.addEventListener("touchcancel", onUp);
 function renderFreePlayFrame() {
   const rect = syncCanvasSize();
   ctx.clearRect(0, 0, rect.width, rect.height);
+  renderDndBoard(rect);
   renderDrawing(rect);
 
   for (const p of lastState) {
@@ -2125,6 +2552,7 @@ function renderFreePlayFrame() {
     ctx.fillStyle     = "rgba(255,255,255,0.85)";
     ctx.fillText(hostCrown(p.id) + p.name, x, y - 32);
   }
+  renderDiceOverlay(rect);
 }
 
 function render() {
@@ -2187,9 +2615,22 @@ $("#draw-size")?.addEventListener("input", (e) => setDrawSize(e.target.value));
 $("#btn-draw-undo")?.addEventListener("click", undoDrawing);
 $("#btn-draw-redo")?.addEventListener("click", redoDrawing);
 $("#btn-draw-clear")?.addEventListener("click", clearDrawingWithConfirmation);
+$("#btn-dnd")?.addEventListener("click", () => setDndOpen(!dndOpen));
+$("#btn-dnd-grid")?.addEventListener("click", () => sendDndAction({ type: "grid", grid: !dndSharedState.grid }));
+$("#dnd-scene")?.addEventListener("change", (e) => setDndScene(e.target.value));
+$("#btn-dnd-add")?.addEventListener("click", addSelectedDndAsset);
+$("#btn-dnd-custom")?.addEventListener("click", createCustomDndAsset);
+$("#btn-dnd-save")?.addEventListener("click", saveSelectedAssetToLibrary);
+$("#btn-dnd-smaller")?.addEventListener("click", () => resizeSelectedDndAsset(-0.5));
+$("#btn-dnd-larger")?.addEventListener("click", () => resizeSelectedDndAsset(0.5));
+$("#btn-dnd-board")?.addEventListener("click", setDndBoardSize);
+$("#btn-dnd-zoom-out")?.addEventListener("click", () => setDndZoom(dndZoom - 0.15));
+$("#btn-dnd-zoom-in")?.addEventListener("click", () => setDndZoom(dndZoom + 0.15));
+$("#btn-dnd-roll")?.addEventListener("click", requestDiceRoll);
 const startupGame = rememberedGameOrDefault() || $("#game-select")?.value || "free-play";
 setGameMode(startupGame).catch(console.error);
 syncDrawToolUi();
+syncDndUi();
 
 // Auto-join from QR link (?join=CODE).
 const joinParam = new URLSearchParams(location.search).get("join");

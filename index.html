@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=4, user-scalable=yes, viewport-fit=cover" />
   <meta name="theme-color" content="#12121f" />
   <title>browserP2P</title>
   <link rel="manifest" href="manifest.webmanifest" />
@@ -88,6 +88,33 @@
           <button id="btn-draw-clear" class="draw-tool-btn draw-clear-btn" type="button" aria-label="Clear all drawings">🗑️</button>
         </div>
       </div>
+        <div id="dnd-dock" class="dnd-dock" aria-label="DnD board tools">
+          <button id="btn-dnd" class="draw-main-btn" aria-label="DnD tools" type="button">⚔️</button>
+          <div id="dnd-toolbar" class="dnd-toolbar hidden" aria-label="DnD tools">
+            <button id="btn-dnd-grid" class="dnd-tool-btn" type="button" aria-label="Toggle 5 ft grid">Grid</button>
+            <select id="dnd-scene" class="dnd-select" aria-label="Pre-built scene"></select>
+            <select id="dnd-asset" class="dnd-select" aria-label="Asset library"></select>
+            <button id="btn-dnd-add" class="dnd-tool-btn" type="button" aria-label="Add selected asset">Add</button>
+            <button id="btn-dnd-custom" class="dnd-tool-btn" type="button" aria-label="Create asset">New</button>
+            <button id="btn-dnd-save" class="dnd-tool-btn" type="button" aria-label="Save selected asset to local library">Save</button>
+            <button id="btn-dnd-smaller" class="dnd-tool-btn" type="button" aria-label="Make selected asset smaller">−</button>
+            <button id="btn-dnd-larger" class="dnd-tool-btn" type="button" aria-label="Make selected asset larger">＋</button>
+            <button id="btn-dnd-board" class="dnd-tool-btn" type="button" aria-label="Set board size">Board</button>
+            <button id="btn-dnd-zoom-out" class="dnd-tool-btn" type="button" aria-label="Zoom out">🔍−</button>
+            <button id="btn-dnd-zoom-in" class="dnd-tool-btn" type="button" aria-label="Zoom in">🔍＋</button>
+            <select id="dnd-dice" class="dnd-select" aria-label="Dice to roll">
+              <option value="1d4">1d4</option>
+              <option value="1d6">1d6</option>
+              <option value="1d8">1d8</option>
+              <option value="1d10">1d10</option>
+              <option value="1d12">1d12</option>
+              <option value="1d20" selected>1d20</option>
+              <option value="2d20">2d20</option>
+              <option value="1d100">1d100</option>
+            </select>
+            <button id="btn-dnd-roll" class="dnd-tool-btn dnd-roll-btn" type="button" aria-label="Roll dice">Roll</button>
+          </div>
+        </div>
       <div id="video-tray" class="video-tray" aria-live="polite"></div>
       <canvas id="stage"></canvas>
     </section>
@@ -139,7 +166,7 @@
       <div class="field-group app-update-group">
           <label>App</label>
           <div class="version-row">
-              <span>Version <strong id="app-version">2.5.12</strong></span>
+              <span>Version <strong id="app-version">2.5.14</strong></span>
               <button id="btn-check-update" class="btn btn-small" type="button">Check for updates</button>
           </div>
           <p id="update-status" class="status"></p>

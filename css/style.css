@@ -338,6 +338,60 @@ input, textarea, select {
   cursor: pointer;
 }
 
+.dnd-dock {
+  position: absolute;
+  left: 16px;
+  bottom: calc(max(20px, env(safe-area-inset-bottom)) + 58px);
+  z-index: 31;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dnd-toolbar {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 24px;
+  background: rgba(28, 28, 46, 0.92);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+  max-width: calc(100vw - 80px);
+}
+
+.dnd-tool-btn,
+.dnd-select {
+  height: 36px;
+  border: none;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.dnd-tool-btn {
+  min-width: 42px;
+  padding: 0 10px;
+}
+
+.dnd-tool-btn.active,
+.dnd-roll-btn {
+  background: var(--accent);
+  color: #06210f;
+}
+
+.dnd-select {
+  max-width: 132px;
+  padding: 0 8px;
+}
+
+.dnd-select option { color: #111; }
+
 .video-tray {
   position: fixed;
   z-index: 19;
