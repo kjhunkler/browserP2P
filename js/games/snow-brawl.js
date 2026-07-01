@@ -111,44 +111,113 @@
       const obstacles = [];
       const ponds = [];
       const roads = [];
+      const lots = [];
       const types = ["Cabin", "Garage", "Store", "Barn", "Shed", "Lodge", "Depot"];
 
-      roads.push({ x: 0, y: MAP_H * 0.48, w: MAP_W, h: 3.4 });
-      roads.push({ x: MAP_W * 0.52, y: 0, w: 3.2, h: MAP_H });
+      const mainY = randRange(rand, MAP_H * 0.42, MAP_H * 0.58);
+      const mainX = randRange(rand, MAP_W * 0.43, MAP_W * 0.58);
+      roads.push({ x: 0, y: mainY - 1.7, w: MAP_W, h: 3.4 });
+      roads.push({ x: mainX - 1.6, y: 0, w: 3.2, h: MAP_H });
+      roads.push({ x: mainX - randRange(rand, 20, 28), y: mainY + randRange(rand, 8, 13), w: randRange(rand, 24, 34), h: 2.0 });
+      roads.push({ x: mainX + randRange(rand, 7, 14), y: mainY - randRange(rand, 14, 20), w: 2.0, h: randRange(rand, 14, 22) });
 
-      for (let i = 0; i < 13; i++) {
-        const w = randRange(rand, 5.5, 9.5), h = randRange(rand, 4.2, 7.5);
-        const p = randInner(rand, 8);
-        const b = { id: "b" + i, type: choice(rand, types), x: p.x - w / 2, y: p.y - h / 2, w, h, door: choice(rand, ["n", "s", "e", "w"]) };
-        if (buildings.some((o) => rectsOverlap(padRect(b, 1.5), padRect(o, 1.5)))) continue;
+      const addLot = (road, side, i) => {
+        const along = road.w > road.h;
+        const gap = 0.8;
+        const lw = along ? randRange(rand, 6.6, 9.4) : randRange(rand, 7.2, 10.5);
+        const lh = along ? randRange(rand, 7.2, 10.5) : randRange(rand, 6.6, 9.4);
+        const cx = along ? randRange(rand, Math.max(6, road.x + 4), Math.min(MAP_W - 6, road.x + road.w - 4)) : road.x + road.w / 2 + side * (road.w / 2 + gap + lw / 2);
+        const cy = along ? road.y + road.h / 2 + side * (road.h / 2 + gap + lh / 2) : randRange(rand, Math.max(6, road.y + 4), Math.min(MAP_H - 6, road.y + road.h - 4));
+        const lot = { x: cx - lw / 2, y: cy - lh / 2, w: lw, h: lh, road, side, along };
+        if (lot.x < 2 || lot.y < 2 || lot.x + lot.w > MAP_W - 2 || lot.y + lot.h > MAP_H - 2) return;
+        if (roads.some((r) => rectsOverlap(padRect(lot, -0.2), r))) return;
+        if (lots.some((l) => rectsOverlap(padRect(lot, 1.0), l))) return;
+        lots.push(lot);
+        const bw = randRange(rand, 3.8, Math.min(6.2, lot.w - 1.7));
+        const bh = randRange(rand, 3.2, Math.min(5.4, lot.h - 1.7));
+        const b = {
+          id: "b" + i,
+          type: choice(rand, types),
+          x: lot.x + randRange(rand, 0.8, Math.max(0.9, lot.w - bw - 0.8)),
+          y: lot.y + randRange(rand, 0.8, Math.max(0.9, lot.h - bh - 0.8)),
+          w: bw,
+          h: bh,
+          door: along ? (side < 0 ? "s" : "n") : (side < 0 ? "e" : "w"),
+        };
         buildings.push(b);
+        addFenceForLot(lot, b, obstacles);
+        if (rand() < 0.55) addDriveway(lot, b, obstacles);
+      };
+
+      let buildingId = 0;
+      for (const road of roads) {
+        const count = road.w > road.h ? Math.ceil(road.w / 13) : Math.ceil(road.h / 12);
+        for (let i = 0; i < count; i++) {
+          if (rand() < 0.78) addLot(road, -1, buildingId++);
+          if (rand() < 0.72) addLot(road, 1, buildingId++);
+        }
       }
 
       for (let i = 0; i < 5; i++) {
-        const p = randInner(rand, 8);
-        ponds.push({ x: p.x, y: p.y, rx: randRange(rand, 2.2, 4.2), ry: randRange(rand, 1.4, 2.8) });
+        const p = i < 2 ? { x: randRange(rand, 6, 18), y: randRange(rand, 6, 18) } : randInner(rand, 8);
+        const pond = { x: p.x, y: p.y, rx: randRange(rand, 2.4, 4.6), ry: randRange(rand, 1.5, 3.1) };
+        const bounds = { x: pond.x - pond.rx - 1.2, y: pond.y - pond.ry - 1.2, w: pond.rx * 2 + 2.4, h: pond.ry * 2 + 2.4 };
+        if (roads.some((r) => rectsOverlap(bounds, r)) || buildings.some((b) => rectsOverlap(bounds, b)) || ponds.some((o) => rectsOverlap(bounds, { x: o.x - o.rx, y: o.y - o.ry, w: o.rx * 2, h: o.ry * 2 }))) continue;
+        ponds.push(pond);
       }
 
-      for (let i = 0; i < 90; i++) {
+      for (let i = 0; i < 100; i++) {
         const p = randInner(rand, 3.2);
-        if (inBuilding(p.x, p.y, { buildings }) || inPond(p.x, p.y, { ponds })) continue;
-        scenery.push({ type: rand() < 0.62 ? "tree" : "bush", x: p.x, y: p.y, r: randRange(rand, 0.35, 0.75) });
+        const nearLot = lots.some((l) => rectsOverlap({ x: p.x - 0.2, y: p.y - 0.2, w: 0.4, h: 0.4 }, padRect(l, 1.5)));
+        if (inBuilding(p.x, p.y, { buildings }) || inPond(p.x, p.y, { ponds }) || roads.some((r) => pointInRect(p.x, p.y, padRect(r, 0.8)))) continue;
+        scenery.push({ type: nearLot || rand() < 0.34 ? "bush" : "tree", x: p.x, y: p.y, r: randRange(rand, 0.35, nearLot ? 0.55 : 0.8) });
       }
 
       for (let i = 0; i < 24; i++) {
-        const p = randInner(rand, 5);
-        const car = { type: rand() < 0.72 ? "car" : "truck", x: p.x - 0.8, y: p.y - 0.45, w: rand() < 0.72 ? 1.7 : 2.6, h: 0.95 };
+        const road = choice(rand, roads);
+        const along = road.w > road.h;
+        const x = along ? randRange(rand, Math.max(3, road.x + 2), Math.min(MAP_W - 3, road.x + road.w - 2)) : road.x + road.w / 2 + randRange(rand, -0.9, 0.9);
+        const y = along ? road.y + road.h / 2 + randRange(rand, -0.8, 0.8) : randRange(rand, Math.max(3, road.y + 2), Math.min(MAP_H - 3, road.y + road.h - 2));
+        const car = { type: rand() < 0.72 ? "car" : "truck", x: x - 0.8, y: y - 0.45, w: rand() < 0.72 ? 1.7 : 2.6, h: 0.95 };
         if (buildings.some((b) => rectsOverlap(padRect(car, 0.7), b))) continue;
         obstacles.push(car);
       }
 
-      for (let i = 0; i < 34; i++) {
-        const horizontal = rand() < 0.5;
-        const p = randInner(rand, 5);
-        obstacles.push({ type: "fence", x: p.x, y: p.y, w: horizontal ? randRange(rand, 2.0, 5.5) : 0.24, h: horizontal ? 0.24 : randRange(rand, 2.0, 5.5) });
-      }
-
       return { buildings, scenery, obstacles, ponds, roads };
+    }
+
+    function addFenceForLot(lot, building, obstacles) {
+      const t = 0.24;
+      const gate = lot.along ? building.x + building.w / 2 : building.y + building.h / 2;
+      const add = (x, y, w, h) => obstacles.push({ type: "fence", x, y, w, h });
+      if (lot.along) {
+        const roadY = lot.side < 0 ? lot.y + lot.h - t : lot.y;
+        const farY = lot.side < 0 ? lot.y : lot.y + lot.h - t;
+        add(lot.x, farY, lot.w, t);
+        add(lot.x, roadY, Math.max(0, gate - lot.x - 1.1), t);
+        add(gate + 1.1, roadY, Math.max(0, lot.x + lot.w - gate - 1.1), t);
+        if (lot.w > 7.4 && lot.h > 8.2 && Math.random() < 0.5) {
+          add(lot.x, lot.y, t, lot.h);
+          add(lot.x + lot.w - t, lot.y, t, lot.h);
+        }
+      } else {
+        const roadX = lot.side < 0 ? lot.x + lot.w - t : lot.x;
+        const farX = lot.side < 0 ? lot.x : lot.x + lot.w - t;
+        add(farX, lot.y, t, lot.h);
+        add(roadX, lot.y, t, Math.max(0, gate - lot.y - 1.1));
+        add(roadX, gate + 1.1, t, Math.max(0, lot.y + lot.h - gate - 1.1));
+        if (lot.w > 8.2 && lot.h > 7.4 && Math.random() < 0.5) {
+          add(lot.x, lot.y, lot.w, t);
+          add(lot.x, lot.y + lot.h - t, lot.w, t);
+        }
+      }
+    }
+
+    function addDriveway(lot, building, obstacles) {
+      const along = lot.along;
+      const x = along ? building.x + building.w / 2 - 0.45 : (lot.side < 0 ? lot.x : lot.x + lot.w - 0.9);
+      const y = along ? (lot.side < 0 ? lot.y + lot.h - 1.7 : lot.y) : building.y + building.h / 2 - 0.45;
+      obstacles.push({ type: "driveway", x, y, w: along ? 0.9 : 1.7, h: along ? 1.7 : 0.9 });
     }
 
     function padRect(r, p) { return { x: r.x - p, y: r.y - p, w: r.w + p * 2, h: r.h + p * 2 }; }
@@ -364,7 +433,7 @@
 
     function blocked(x, y, r) {
       if (inPond(x, y)) return true;
-      for (const o of map.obstacles) if (circleRect(x, y, r, o)) return true;
+      for (const o of map.obstacles) if (o.type !== "driveway" && circleRect(x, y, r, o)) return true;
       for (const o of state.objects) if (!o.dead && Math.hypot(o.x - x, o.y - y) < r + o.r) return true;
       return false;
     }
@@ -682,6 +751,7 @@
     function drawBuildingFloor(b) { drawRectWorld(b, "#9b7b5f"); ctx.strokeStyle = "#6e5440"; ctx.lineWidth = 2; ctx.strokeRect(sx(b.x), sy(b.y), b.w * camera.scale, b.h * camera.scale); }
     function drawObstacle(o) {
       if (o.type === "fence") drawRectWorld(o, "#8b6a3f");
+      else if (o.type === "driveway") drawRectWorld(o, "#b9c2cc");
       else drawRectWorld(o, o.type === "truck" ? "#475569" : "#64748b");
     }
     function drawScenery(s) {
