@@ -148,7 +148,7 @@
           door: along ? (side < 0 ? "s" : "n") : (side < 0 ? "e" : "w"),
         };
         buildings.push(b);
-        addFenceForLot(lot, b, obstacles);
+        addFenceForLot(lot, b, obstacles, rand);
         if (rand() < 0.55) addDriveway(lot, b, obstacles);
       };
 
@@ -189,7 +189,7 @@
       return { buildings, scenery, obstacles, ponds, roads };
     }
 
-    function addFenceForLot(lot, building, obstacles) {
+    function addFenceForLot(lot, building, obstacles, rand) {
       const t = 0.24;
       const gate = lot.along ? building.x + building.w / 2 : building.y + building.h / 2;
       const add = (x, y, w, h) => obstacles.push({ type: "fence", x, y, w, h });
@@ -199,7 +199,7 @@
         add(lot.x, farY, lot.w, t);
         add(lot.x, roadY, Math.max(0, gate - lot.x - 1.1), t);
         add(gate + 1.1, roadY, Math.max(0, lot.x + lot.w - gate - 1.1), t);
-        if (lot.w > 7.4 && lot.h > 8.2 && Math.random() < 0.5) {
+        if (lot.w > 7.4 && lot.h > 8.2 && rand() < 0.5) {
           add(lot.x, lot.y, t, lot.h);
           add(lot.x + lot.w - t, lot.y, t, lot.h);
         }
@@ -209,7 +209,7 @@
         add(farX, lot.y, t, lot.h);
         add(roadX, lot.y, t, Math.max(0, gate - lot.y - 1.1));
         add(roadX, gate + 1.1, t, Math.max(0, lot.y + lot.h - gate - 1.1));
-        if (lot.w > 8.2 && lot.h > 7.4 && Math.random() < 0.5) {
+        if (lot.w > 8.2 && lot.h > 7.4 && rand() < 0.5) {
           add(lot.x, lot.y, lot.w, t);
           add(lot.x, lot.y + lot.h - t, lot.w, t);
         }
@@ -344,7 +344,6 @@
     function syncPlayerList(newRound = false) {
       if (!isHost()) return;
       const live = new Set(host.getPlayers().map((p) => p.id));
-      for (const id of Object.keys(state.players)) if (!live.has(id)) delete state.players[id];
       for (const p of host.getPlayers()) {
         if (!state.players[p.id]) spawnPlayer(p.id, true);
         else {

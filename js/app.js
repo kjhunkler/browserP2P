@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.5.9";
+const APP_VERSION = "2.5.10";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
@@ -354,8 +354,13 @@ function pickColor() {
 
 function addPlayer(id, name, peerId, icon, preferredColor) {
   if (players.has(id)) {
+    const p = players.get(id);
+    p.name = name || p.name;
+    p.icon = icon || p.icon || DEFAULT_ICON;
+    p.connected = true;
     if (peerId) peerMap.set(peerId, id);
-    return players.get(id);
+    profiles.set(id, { name: p.name, color: p.color, icon: p.icon });
+    return p;
   }
   let color;
   if (preferredColor && !usedColors.has(preferredColor)) {
@@ -364,7 +369,7 @@ function addPlayer(id, name, peerId, icon, preferredColor) {
   } else {
     color = pickColor();
   }
-  const p = { id, name, color, icon: icon || DEFAULT_ICON, x: 0.5, y: 0.5 };
+  const p = { id, name, color, icon: icon || DEFAULT_ICON, x: 0.5, y: 0.5, connected: true };
   players.set(id, p);
   if (peerId) peerMap.set(peerId, id);
   profiles.set(id, { name: p.name, color: p.color, icon: p.icon });
@@ -382,7 +387,7 @@ function wireNetEvents() {
       // Host migration: restore last snapshot so players keep colors and positions.
       for (const p of lastState) {
         if (p.id === migratingFromHostId) continue;
-        players.set(p.id, { ...p, icon: p.icon || DEFAULT_ICON });
+        players.set(p.id, { ...p, icon: p.icon || DEFAULT_ICON, connected: p.connected !== false });
         usedColors.add(p.color);
         profiles.set(p.id, { name: p.name, color: p.color, icon: p.icon || DEFAULT_ICON });
       }
@@ -419,14 +424,14 @@ function wireNetEvents() {
     if (id) {
       const p = players.get(id);
       const name = p ? p.name : "Someone";
-      if (p) usedColors.delete(p.color);
-      players.delete(id);
+      if (p) p.connected = false;
       peerMap.delete(peerId);
       liveVideoPeers.delete(id);
       removeVideoTile(id);
       markSilent(id);
       pushSys(name + " left");
       net.broadcast({ t: "sys", text: name + " left" });
+      notifyActiveGamePlayersChanged();
     }
     renderLobby();
   });
@@ -716,10 +721,11 @@ function startHostLoop() {
       yieldHostForBackground("timer throttling");
       return;
     }
-    const list = [...players.values()].map(p => ({
+    const connectedPlayers = [...players.values()].filter((p) => p.connected !== false);
+    const list = connectedPlayers.map(p => ({
       id: p.id, name: p.name, color: p.color, icon: p.icon, x: p.x, y: p.y,
     }));
-    const hostOrder = [...players.keys()];
+    const hostOrder = connectedPlayers.map((p) => p.id);
     net.broadcast({ t: "state", players: list, hostOrder });
     lastState = list;
     lastHostOrder = hostOrder;
