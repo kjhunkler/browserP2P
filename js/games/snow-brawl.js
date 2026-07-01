@@ -308,7 +308,8 @@
       if (p && !fresh) return p;
       const rand = rng((state.seed ^ hash(id) ^ state.round) >>> 0);
       let pos = randInner(rand, 8);
-      for (let i = 0; i < 40 && (inPond(pos.x, pos.y) || inBuilding(pos.x, pos.y)); i++) pos = randInner(rand, 8);
+      for (let i = 0; i < 80 && !safePlayerSpawn(pos); i++) pos = randInner(rand, 8);
+      if (!safePlayerSpawn(pos)) pos = findSafePlayerSpawn(rand);
       p = {
         id, x: pos.x, y: pos.y, vx: 0, vy: 0, aimX: 1, aimY: 0, hp: 100, warmth: 100, cold: 0,
         snowballs: 6, binoculars: 0, alive: true, spectator: false, weapon: "snowball", cool: 0,
@@ -316,6 +317,26 @@
       };
       state.players[id] = p;
       return p;
+    }
+
+    function safePlayerSpawn(pos) {
+      if (!pos || nearMapEdge(pos, 2)) return false;
+      if (inPond(pos.x, pos.y) || inBuilding(pos.x, pos.y)) return false;
+      if (blocked(pos.x, pos.y, PLAYER_R + 0.08)) return false;
+      for (const p of Object.values(state.players)) {
+        if (p.alive && Math.hypot(p.x - pos.x, p.y - pos.y) < PLAYER_R * 4) return false;
+      }
+      return true;
+    }
+
+    function findSafePlayerSpawn(rand) {
+      for (let y = 6; y <= MAP_H - 6; y += 2) {
+        for (let x = 6; x <= MAP_W - 6; x += 2) {
+          const pos = { x: x + randRange(rand, -0.5, 0.5), y: y + randRange(rand, -0.5, 0.5) };
+          if (safePlayerSpawn(pos)) return pos;
+        }
+      }
+      return { x: MAP_W / 2, y: MAP_H / 2 };
     }
 
     function hash(s) { let h = 2166136261; for (let i = 0; i < String(s).length; i++) h = Math.imul(h ^ String(s).charCodeAt(i), 16777619); return h >>> 0; }

@@ -15,6 +15,7 @@
  *   peer-leave   (peerId)            a client disconnected (host only)
  *   connected    ()                  we reached the host (client only)
  *   host-closed  ()                  the host went away (client only)
+ *   host-yield   (reason)            the host intentionally yielded (client only)
  *   message      ({ from, data })    a message arrived
  *   error        (err)               something went wrong
  */
@@ -67,6 +68,9 @@ class PeerNet {
     if (data.kind === "hb") {
       this._markHostSeen();
       if (conn?.open) conn.send({ t: INTERNAL, kind: "ack", ts: Date.now() });
+    } else if (data.kind === "yield") {
+      this._markHostSeen();
+      if (!this.isHost) this._emit("host-yield", data.reason || "host yielded");
     }
     return true;
   }
@@ -372,6 +376,11 @@ class PeerNet {
 
   peerCount() {
     return this.isHost ? this.conns.size : this.hostConn ? 1 : 0;
+  }
+
+  yieldHost(reason = "host yielded") {
+    if (!this.isHost || this._closed) return;
+    this.broadcast({ t: INTERNAL, kind: "yield", reason, ts: Date.now() });
   }
 
   // Re-run the auto election on an existing instance (e.g. after the host

@@ -440,19 +440,12 @@ function wireNetEvents() {
   });
 
   net.on("host-closed", () => {
-    if (hasLeftLobby) return;
-    if (!autoMode) { alert("The host left. Game over."); location.reload(); return; }
-    keepPlayingAfterMigration = screens.play.classList.contains("active");
-    migratingFromHostId = lastHostOrder[0] || null;
-    pendingMigratedGameState = snapshotActiveGame("host migration snapshot") || loadSavedGameState(selectedGame)?.state || null;
-    const remainingOrder = migratingFromHostId ? lastHostOrder.filter((id) => id !== migratingFromHostId) : [MY_ID];
-    const myIndex = remainingOrder.indexOf(MY_ID);
-    const preferHost = myIndex === 0;
-    const delay = myIndex < 0 ? 300 : myIndex * 700;
-    stopHostLoop();
-    setTimeout(() => {
-      if (!hasLeftLobby) net.migrate(AUTO_CHANNEL, preferHost);
-    }, delay);
+    migrateFromHost("host migration snapshot");
+  });
+
+  net.on("host-yield", (reason) => {
+    pushSys("Host handoff: " + reason);
+    migrateFromHost("host handoff snapshot");
   });
 
   net.on("error", (err) => {
@@ -479,6 +472,22 @@ function wireNetEvents() {
   net.on("media-close", removeVideoTile);
 }
 wireNetEvents();
+
+function migrateFromHost(snapshotReason) {
+  if (hasLeftLobby) return;
+  if (!autoMode) { alert("The host left. Game over."); location.reload(); return; }
+  keepPlayingAfterMigration = screens.play.classList.contains("active");
+  migratingFromHostId = lastHostOrder[0] || null;
+  pendingMigratedGameState = snapshotActiveGame(snapshotReason) || loadSavedGameState(selectedGame)?.state || null;
+  const remainingOrder = migratingFromHostId ? lastHostOrder.filter((id) => id !== migratingFromHostId) : [MY_ID];
+  const myIndex = remainingOrder.indexOf(MY_ID);
+  const preferHost = myIndex === 0;
+  const delay = myIndex < 0 ? 300 : myIndex * 700;
+  stopHostLoop();
+  setTimeout(() => {
+    if (!hasLeftLobby) net.migrate(AUTO_CHANNEL, preferHost);
+  }, delay);
+}
 
 // ---- host-side message handling ----
 function handleHostMsg(peerId, msg) {
@@ -734,6 +743,7 @@ function yieldHostForBackground(reason = "background") {
   if (state) saveGameState(selectedGame, state);
   pushSys("Host handoff: " + reason);
   stopHostLoop();
+  net.yieldHost(reason);
   net.destroy();
   show(keepPlayingAfterMigration ? "play" : "lobby");
 }
