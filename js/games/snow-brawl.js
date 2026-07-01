@@ -6,7 +6,9 @@
 
   const MAP_W = 72;
   const MAP_H = 52;
-  const SNAPSHOT_HZ = 15;
+  const FAST_SNAPSHOT_HZ = 20;
+  const MID_SNAPSHOT_HZ = 6;
+  const SLOW_SNAPSHOT_HZ = 2;
   const SNAPSHOT_INTERPOLATION_MS = 120;
   const SNAPSHOT_SNAP_DISTANCE = 3.5;
   const FULL_SNAPSHOT_MS = 5000;
@@ -22,6 +24,7 @@
   const PROJECTILE_SPEED = 16;
   const PROJECTILE_LIFE = 0.9;
   const SNOWBALL_DAMAGE = 20;
+  const SNOWBALL_HEAT_LOSS = 10;
   const MELEE_DAMAGE = 50;
   const MELEE_RANGE = 1.55;
   const MELEE_HALF_ANGLE = Math.PI / 5;
@@ -43,7 +46,9 @@
 
     let rafId = 0;
     let lastTs = 0;
-    let lastSnapshotAt = 0;
+    let lastFastSnapshotAt = 0;
+    let lastMidSnapshotAt = 0;
+    let lastSlowSnapshotAt = 0;
     let lastFullSnapshotAt = 0;
     let lastCssWidth = 0;
     let lastCssHeight = 0;
@@ -60,6 +65,7 @@
     let keys = new Set();
     let selectedWeapon = "snowball";
     let pendingFire = null;
+    let aimFlash = null;
     let lastInputSentAt = 0;
     let weaponRect = null;
     const dirtyItems = new Set();
@@ -524,8 +530,11 @@
       state.projectiles = state.projectiles.filter((q) => q.life > 0);
     }
 
-    function damagePlayer(p, amount, by) {
+    function damagePlayer(p, amount, by, heatLoss = 0) {
       p.hp = Math.max(0, p.hp - amount);
+      if (heatLoss > 0) p.warmth = Math.max(0, (p.warmth || 0) - heatLoss);
+      p.hitAt = Date.now();
+      state.events.push({ type: "damage", x: p.x, y: p.y, id: p.id, amount, t: Date.now() });
       if (p.hp <= 0 && p.alive) {
         p.alive = false;
         p.spectator = true;
@@ -541,9 +550,9 @@
       s.hp -= amount;
       if (s.hp <= 0 && !s.dead) {
         s.dead = true;
+        dropPile(s.x, s.y, 3 + Math.floor(Math.random() * 4));
         if (Math.random() < 0.28) dropItem("heart", s.x, s.y);
         else if (Math.random() < 0.22) dropItem("binoculars", s.x, s.y);
-        else dropItem("snowballs", s.x, s.y, 3);
         if (by && state.players[by]) state.players[by].kills = (state.players[by].kills || 0) + 1;
       }
     }
@@ -566,6 +575,12 @@
       const it = { id: id("i"), type, x: x + (Math.random() - 0.5) * 0.5, y: y + (Math.random() - 0.5) * 0.5, count, dead: false };
       state.items.push(it);
       dirtyItems.add(it.id);
+    }
+
+    function dropPile(x, y, count = 3) {
+      const pile = { id: id("p"), x: x + (Math.random() - 0.5) * 0.7, y: y + (Math.random() - 0.5) * 0.7, count, dead: false };
+      state.piles.push(pile);
+      dirtyObjects.add(pile.id);
     }
 
     function collectPickups() {
@@ -613,29 +628,41 @@
       }
     }
 
-    function makeSnapshot(full = false) {
-      full = full || !lastFullSnapshotAt;
+    function makeSnapshot(kind = "full") {
+      const full = kind === true || kind === "full" || !lastFullSnapshotAt;
       const snap = {
+        kind: full ? "full" : kind,
         full,
         seed: state.seed,
         round: state.round,
         over: state.over,
         winner: state.winner,
         restartAt: state.restartAt,
-        players: state.players,
-        snowmen: state.snowmen,
-        projectiles: state.projectiles,
-        tracks: state.tracks.slice(-320),
-        events: state.events.slice(-24),
         nextId,
       };
+      if (full || kind === "fast") {
+        snap.players = state.players;
+        snap.projectiles = state.projectiles;
+      }
+      if (full || kind === "mid") {
+        snap.snowmen = state.snowmen;
+        snap.events = state.events.slice(-24);
+      }
+      if (full || kind === "slow") {
+        snap.tracks = state.tracks.slice(-320);
+      }
       if (full) {
+        snap.players = state.players;
+        snap.snowmen = state.snowmen;
+        snap.projectiles = state.projectiles;
+        snap.tracks = state.tracks.slice(-320);
+        snap.events = state.events.slice(-24);
         snap.items = state.items;
         snap.objects = state.objects;
         snap.piles = state.piles;
         dirtyItems.clear();
         dirtyObjects.clear();
-      } else {
+      } else if (kind === "slow") {
         snap.itemDelta = [...dirtyItems].map((itemId) => state.items.find((i) => i.id === itemId) || { id: itemId, dead: true });
         snap.objectDelta = [...dirtyObjects].map((objId) => state.objects.find((o) => o.id === objId) || state.piles.find((p) => p.id === objId) || { id: objId, dead: true });
         dirtyItems.clear();
@@ -656,11 +683,11 @@
       state.over = !!s.over;
       state.winner = s.winner || null;
       state.restartAt = s.restartAt || 0;
-      state.players = s.players || {};
-      state.snowmen = s.snowmen || [];
-      state.projectiles = s.projectiles || [];
-      state.tracks = s.tracks || [];
-      state.events = s.events || [];
+      if (s.players) state.players = s.players;
+      if (s.snowmen) state.snowmen = s.snowmen;
+      if (s.projectiles) state.projectiles = s.projectiles;
+      if (s.tracks) state.tracks = s.tracks;
+      if (s.events) state.events = s.events;
       nextId = Math.max(nextId, s.nextId || 1);
       if (s.full) {
         state.items = s.items || [];
@@ -898,13 +925,51 @@
     function drawPlayer(p) {
       const x = sx(p.x), y = sy(p.y), r = PLAYER_R * camera.scale;
       if (!p.alive) { ctx.globalAlpha = 0.35; }
+      const hitAge = Date.now() - (p.hitAt || 0);
+      if (hitAge < 380) {
+        ctx.strokeStyle = `rgba(255,70,70,${1 - hitAge / 380})`;
+        ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.arc(x, y, r + 10 * (1 - hitAge / 380), 0, Math.PI * 2); ctx.stroke();
+      }
       if (host.isSpeaking?.(p.id)) { ctx.strokeStyle = "#7cfc9b"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y, r + 8, 0, Math.PI * 2); ctx.stroke(); }
       ctx.fillStyle = p.color || "#7cfc9b";
       ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
       drawText(p.icon || "❄️", x, y + 1, Math.max(14, r * 1.2), "#10202b");
+      drawThermometer(x - r - 7, y - r - 18, p.warmth / 100);
       drawBar(x - r, y - r - 12, r * 2, 4, p.hp / 100, "#ef4444");
+      drawPlayerAmmoBadge(p, x + r * 0.72, y - r * 0.72, r);
       drawText((host.hostCrown?.(p.id) || "") + (p.name || "Player"), x, y - r - 20, 11, "#102033");
       ctx.globalAlpha = 1;
+    }
+
+    function drawPlayerAmmoBadge(p, x, y, r) {
+      ctx.save();
+      if (p.weapon === "melee") {
+        ctx.fillStyle = "rgba(20,25,35,0.82)";
+        ctx.beginPath(); ctx.arc(x, y, Math.max(11, r * 0.55), 0, Math.PI * 2); ctx.fill();
+        drawText("🪓", x, y, Math.max(13, r * 0.72));
+      } else {
+        const br = Math.max(10, r * 0.52);
+        ctx.fillStyle = "#fff";
+        ctx.beginPath(); ctx.arc(x, y, br, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = "rgba(75,95,120,0.65)"; ctx.lineWidth = 2; ctx.stroke();
+        drawText(String(p.snowballs || 0), x, y + 0.5, Math.max(10, br * 0.9), "#26384b");
+      }
+      ctx.restore();
+    }
+
+    function drawThermometer(x, y, pct) {
+      pct = clamp(pct || 0, 0, 1);
+      const w = 4, h = 16;
+      const hot = pct > 0.34;
+      ctx.save();
+      ctx.fillStyle = "rgba(10,18,30,0.65)";
+      roundRect(x - 2, y, w + 4, h + 8, 4); ctx.fill();
+      ctx.fillStyle = hot ? "#fb923c" : "#38bdf8";
+      ctx.fillRect(x, y + 2 + (h - h * pct), w, h * pct);
+      ctx.beginPath(); ctx.arc(x + w / 2, y + h + 4, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.75)"; ctx.lineWidth = 1; ctx.stroke();
+      ctx.restore();
     }
 
     function drawSnowman(s) {
@@ -927,6 +992,12 @@
         ctx.save(); ctx.strokeStyle = selectedWeapon === "melee" ? "rgba(255,180,100,0.7)" : "rgba(255,255,255,0.8)"; ctx.lineWidth = 3;
         if (selectedWeapon === "melee") drawMeleeCone(me.x, me.y, controls.ax, controls.ay);
         else { ctx.beginPath(); ctx.moveTo(sx(me.x), sy(me.y)); ctx.lineTo(sx(me.x + controls.ax * 5), sy(me.y + controls.ay * 5)); ctx.stroke(); }
+        ctx.restore();
+      }
+      if (aimFlash && Date.now() - aimFlash.t < 260) {
+        const a = 1 - (Date.now() - aimFlash.t) / 260;
+        ctx.save(); ctx.strokeStyle = `rgba(255,255,255,${a})`; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(sx(aimFlash.x), sy(aimFlash.y)); ctx.lineTo(sx(aimFlash.x + aimFlash.ax * aimFlash.len), sy(aimFlash.y + aimFlash.ay * aimFlash.len)); ctx.stroke();
         ctx.restore();
       }
     }
@@ -1061,6 +1132,8 @@
         const auto = pendingFire === "auto";
         pendingFire = null;
         if (auto) autoTargetAim();
+        const me = state.players[myId];
+        if (me?.alive) aimFlash = { x: me.x, y: me.y, ax: controls.ax, ay: controls.ay, len: selectedWeapon === "melee" ? MELEE_RANGE : 5, t: Date.now() };
         sendControls(!isSpectating());
       }
       else if (now() - lastInputSentAt > 55) { lastInputSentAt = now(); sendControls(false); }
@@ -1150,11 +1223,25 @@
       updateLocalControls();
       if (isHost()) {
         updateHost(dt);
-        if (ts - lastSnapshotAt >= 1000 / SNAPSHOT_HZ) {
-          const full = !lastFullSnapshotAt || ts - lastFullSnapshotAt >= FULL_SNAPSHOT_MS;
-          if (full) lastFullSnapshotAt = ts;
-          lastSnapshotAt = ts;
-          host.broadcastState(makeSnapshot(full));
+        if (!lastFullSnapshotAt || ts - lastFullSnapshotAt >= FULL_SNAPSHOT_MS) {
+          lastFullSnapshotAt = ts;
+          lastFastSnapshotAt = ts;
+          lastMidSnapshotAt = ts;
+          lastSlowSnapshotAt = ts;
+          host.broadcastState(makeSnapshot("full"));
+        } else {
+          if (ts - lastFastSnapshotAt >= 1000 / FAST_SNAPSHOT_HZ) {
+            lastFastSnapshotAt = ts;
+            host.broadcastState(makeSnapshot("fast"));
+          }
+          if (ts - lastMidSnapshotAt >= 1000 / MID_SNAPSHOT_HZ) {
+            lastMidSnapshotAt = ts;
+            host.broadcastState(makeSnapshot("mid"));
+          }
+          if (ts - lastSlowSnapshotAt >= 1000 / SLOW_SNAPSHOT_HZ) {
+            lastSlowSnapshotAt = ts;
+            host.broadcastState(makeSnapshot("slow"));
+          }
         }
       }
       else updateClientPrediction(dt);
@@ -1210,7 +1297,7 @@
       onPeerInput(id, input) { handleAction(id, input); },
       onState(snapshot) { applySnapshot(snapshot); },
       getSnapshot() { return currentSnapshot(); },
-      onPlayerList() { if (isHost()) { syncPlayerList(false); host.broadcastState(makeSnapshot(true)); } },
+      onPlayerList() { if (isHost()) { syncPlayerList(false); host.broadcastState(makeSnapshot("full")); } },
       restart() { if (isHost()) resetHostState(true); },
     };
   }
