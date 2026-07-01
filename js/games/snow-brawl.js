@@ -6,7 +6,9 @@
 
   const MAP_W = 72;
   const MAP_H = 52;
-  const SNAPSHOT_HZ = 10;
+  const SNAPSHOT_HZ = 15;
+  const SNAPSHOT_INTERPOLATION_MS = 120;
+  const SNAPSHOT_SNAP_DISTANCE = 3.5;
   const FULL_SNAPSHOT_MS = 5000;
   const PLAYER_R = 0.34;
   const SNOWMAN_R = 0.34;
@@ -62,6 +64,7 @@
     let weaponRect = null;
     const dirtyItems = new Set();
     const dirtyObjects = new Set();
+    const visualEntities = { players: new Map(), snowmen: new Map(), projectiles: new Map() };
     const controls = { mx: 0, my: 0, ax: 1, ay: 0, aiming: false, weapon: "snowball" };
 
     const state = {
@@ -626,6 +629,7 @@
     function applySnapshot(s) {
       if (!s) return;
       const oldSeed = state.seed;
+      const oldRound = state.round;
       state.seed = s.seed || state.seed;
       if (!map || oldSeed !== state.seed) map = makeMap(state.seed);
       state.round = s.round || 1;
@@ -646,6 +650,71 @@
         applyArrayDelta(state.items, s.itemDelta);
         applyMixedObjectDelta(s.objectDelta);
       }
+      if (oldSeed !== state.seed || oldRound !== state.round) {
+        visualEntities.players.clear();
+        visualEntities.snowmen.clear();
+        visualEntities.projectiles.clear();
+      }
+      captureVisualTargets(state.players, state.snowmen, state.projectiles);
+    }
+
+    function captureVisualTargets(players, snowmen, projectiles) {
+      if (isHost()) return;
+      const t = now();
+      captureVisualMap(visualEntities.players, Object.values(players || {}), t);
+      captureVisualMap(visualEntities.snowmen, snowmen || [], t);
+      captureVisualMap(visualEntities.projectiles, projectiles || [], t);
+    }
+
+    function captureVisualMap(map, entities, t) {
+      const live = new Set();
+      for (const e of entities) {
+        if (!e?.id) continue;
+        live.add(e.id);
+        const v = map.get(e.id);
+        if (!v) map.set(e.id, { x: e.x, y: e.y, fromX: e.x, fromY: e.y, targetX: e.x, targetY: e.y, at: t });
+        else Object.assign(v, { fromX: v.x, fromY: v.y, targetX: e.x, targetY: e.y, at: t });
+      }
+      for (const id of map.keys()) if (!live.has(id)) map.delete(id);
+    }
+
+    function visualEntity(e, kind) {
+      if (isHost() || !e?.id) return e;
+      const map = visualEntities[kind];
+      let v = map.get(e.id);
+      if (!v) {
+        v = { x: e.x, y: e.y, fromX: e.x, fromY: e.y, targetX: e.x, targetY: e.y, at: now() };
+        map.set(e.id, v);
+      }
+      const d = Math.hypot((e.x || 0) - v.x, (e.y || 0) - v.y);
+      if (d > SNAPSHOT_SNAP_DISTANCE) {
+        Object.assign(v, { x: e.x, y: e.y, fromX: e.x, fromY: e.y, targetX: e.x, targetY: e.y, at: now() });
+      } else {
+        const a = clamp((now() - v.at) / SNAPSHOT_INTERPOLATION_MS, 0, 1);
+        const eased = a * a * (3 - 2 * a);
+        v.x = v.fromX + (v.targetX - v.fromX) * eased;
+        v.y = v.fromY + (v.targetY - v.fromY) * eased;
+      }
+      return { ...e, x: v.x, y: v.y };
+    }
+
+    function updateClientPrediction(dt) {
+      if (isHost()) return;
+      const me = state.players[myId];
+      if (!me?.alive || state.over) return;
+      me.cool = Math.max(0, (me.cool || 0) - dt);
+      const d = Math.hypot(controls.mx, controls.my);
+      if (d > 0.05) {
+        const slow = me.warmth < 35 ? 0.55 + me.warmth / 80 : 1;
+        const speed = BASE_SPEED * slow;
+        moveCircle(me, controls.mx / d * speed * dt, controls.my / d * speed * dt, PLAYER_R);
+      }
+      if (Math.hypot(controls.ax, controls.ay) > 0.15) {
+        me.aimX = controls.ax;
+        me.aimY = controls.ay;
+      }
+      const v = visualEntities.players.get(myId);
+      if (v) Object.assign(v, { x: me.x, y: me.y, fromX: me.x, fromY: me.y, targetX: me.x, targetY: me.y, at: now() });
     }
 
     function applyArrayDelta(arr, delta) {
@@ -698,6 +767,7 @@
       spectatorCamera = null;
       let target = me;
       if (!target?.alive) target = Object.values(state.players).find((p) => p.alive) || me;
+      if (target) target = visualEntity(target, "players");
       if (target) {
         camera.x += (target.x - camera.x) * 0.15;
         camera.y += (target.y - camera.y) * 0.15;
@@ -784,8 +854,14 @@
     function objEmoji(type) { return type === "barrel" ? "🛢️" : type === "trash" ? "🗑️" : type === "chest" ? "📦" : "🏺"; }
 
     function drawActors() {
-      for (const s of state.snowmen) if (visibleEntity(s)) drawSnowman(s);
-      for (const p of Object.values(state.players)) if (visibleEntity(p)) drawPlayer(p);
+      for (const s of state.snowmen) {
+        const vs = visualEntity(s, "snowmen");
+        if (visibleEntity(vs)) drawSnowman(vs);
+      }
+      for (const p of Object.values(state.players)) {
+        const vp = visualEntity(p, "players");
+        if (visibleEntity(vp)) drawPlayer(vp);
+      }
     }
 
     function visibleEntity(e) {
@@ -822,7 +898,10 @@
 
     function drawProjectiles() {
       ctx.fillStyle = "#ffffff";
-      for (const q of state.projectiles) { ctx.beginPath(); ctx.arc(sx(q.x), sy(q.y), 0.16 * camera.scale, 0, Math.PI * 2); ctx.fill(); }
+      for (const q of state.projectiles) {
+        const vq = visualEntity(q, "projectiles");
+        ctx.beginPath(); ctx.arc(sx(vq.x), sy(vq.y), 0.16 * camera.scale, 0, Math.PI * 2); ctx.fill();
+      }
       const me = state.players[myId];
       if (me?.alive && controls.aiming) {
         ctx.save(); ctx.strokeStyle = selectedWeapon === "melee" ? "rgba(255,180,100,0.7)" : "rgba(255,255,255,0.8)"; ctx.lineWidth = 3;
@@ -1058,6 +1137,7 @@
           host.broadcastState(makeSnapshot(full));
         }
       }
+      else updateClientPrediction(dt);
       draw();
     }
 
