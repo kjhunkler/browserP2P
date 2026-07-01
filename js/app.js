@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.6.0";
+const APP_VERSION = "2.6.1";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
@@ -977,8 +977,9 @@ let dndLocalLibrary = loadDndLibrary();
 let dndOpen = false;
 let dndSelectedId = null;
 let dndDrag = null;
+let dndPlayerDrag = null;
 let dndHoverName = "";
-let dndZoom = Math.max(0.55, Math.min(2.25, Number(localStorage.getItem(DND_ZOOM_KEY) || 1)));
+let dndZoom = Math.max(0.25, Math.min(2.25, Number(localStorage.getItem(DND_ZOOM_KEY) || 1)));
 let activeDiceRoll = null;
 let dndPointerDown = null;
 
@@ -1264,7 +1265,7 @@ function setDndBoardSize() {
 }
 
 function setDndZoom(next) {
-  dndZoom = Math.max(0.55, Math.min(2.25, next));
+  dndZoom = Math.max(0.25, Math.min(2.25, next));
   localStorage.setItem(DND_ZOOM_KEY, String(dndZoom));
   syncDndCanvasStyle();
 }
@@ -2820,7 +2821,9 @@ function onDown(e) {
   const player = playerAtPoint(pointerToNorm(e));
   if (player && !drawMode) {
     e.preventDefault();
+    const point = pointerToNorm(e);
     dndPointerDown = { kind: "player", entity: { ...player, kind: "player", stats: dndStatsForPlayer(player) }, x: boardPoint.x, y: boardPoint.y };
+    if (player.id === MY_ID) dndPlayerDrag = { id: player.id, dx: point.x - player.x, dy: point.y - player.y, moved: false };
     return;
   }
   if (drawMode) {
@@ -2843,8 +2846,6 @@ function onDown(e) {
     };
     return;
   }
-  dragging = true;
-  onMove(e);
 }
 function onMove(e) {
   if (selectedGame !== "free-play") return;
@@ -2858,6 +2859,21 @@ function onMove(e) {
       if (Math.hypot(point.x - (asset.x + dndDrag.dx), point.y - (asset.y + dndDrag.dy)) > 0.08) dndDrag.moved = true;
       asset.x = Math.max(0, Math.min(board.cols - asset.w, Math.round((point.x - dndDrag.dx) * 2) / 2));
       asset.y = Math.max(0, Math.min(board.rows - asset.h, Math.round((point.y - dndDrag.dy) * 2) / 2));
+    }
+    return;
+  }
+  if (dndPlayerDrag) {
+    e.preventDefault();
+    const point = pointerToNorm(e);
+    const x = clamp01(point.x - dndPlayerDrag.dx);
+    const y = clamp01(point.y - dndPlayerDrag.dy);
+    const start = dndPointerDown?.entity;
+    if (start && Math.hypot(x - start.x, y - start.y) > 0.01) dndPlayerDrag.moved = true;
+    if (net.isHost) {
+      const me = players.get(MY_ID);
+      if (me) { me.x = x; me.y = y; }
+    } else {
+      net.send({ t: "input", x, y });
     }
     return;
   }
@@ -2885,10 +2901,13 @@ function onUp() {
     const asset = dndSharedState.assets.find((a) => a.id === dndDrag.id);
     if (asset) sendDndAction({ type: "move", id: asset.id, x: asset.x, y: asset.y });
     if (!dndDrag.moved && asset) showDndStats({ ...asset, kind: asset.role || "asset" });
+  } else if (dndPlayerDrag) {
+    if (!dndPlayerDrag.moved && dndPointerDown?.entity) showDndStats(dndPointerDown.entity);
   } else if (dndPointerDown?.entity) {
     showDndStats(dndPointerDown.entity);
   }
   dndDrag = null;
+  dndPlayerDrag = null;
   dndPointerDown = null;
   if (drawing && currentStroke) addDrawingStroke(currentStroke);
   drawing = false;

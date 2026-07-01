@@ -365,7 +365,7 @@ input, textarea, select {
 }
 
 .draw-dock {
-  position: absolute;
+  position: fixed;
   left: 16px;
   bottom: max(20px, env(safe-area-inset-bottom));
   z-index: 30;
@@ -462,7 +462,7 @@ input, textarea, select {
 }
 
 .dnd-dock {
-  position: absolute;
+  position: fixed;
   left: 16px;
   bottom: calc(max(20px, env(safe-area-inset-bottom)) + 58px);
   z-index: 31;
