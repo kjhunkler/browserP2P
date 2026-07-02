@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.8.0";
+const APP_VERSION = "2.8.1";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
@@ -1042,7 +1042,13 @@ let dndDrag = null;
 let dndInventoryDrag = null;
 let dndPlayerDrag = null;
 let dndHoverName = "";
-let dndZoom = Math.max(0.25, Math.min(2.25, Number(localStorage.getItem(DND_ZOOM_KEY) || 1)));
+const DND_ZOOM_MIN = 0.08;
+const DND_ZOOM_MAX = 3;
+let dndZoom = Math.max(DND_ZOOM_MIN, Math.min(DND_ZOOM_MAX, Number(localStorage.getItem(DND_ZOOM_KEY) || 1)));
+let dndCam = null; // board-cell coords of the viewport center
+let dndPan = null; // active empty-space pan gesture
+let dndPinch = null; // active two-finger pinch gesture
+let dndViewInitialized = false; // fit board on the first rendered frame
 let activeDiceRoll = null;
 let dndPointerDown = null;
 
@@ -1238,24 +1244,20 @@ function hideDndStats() {
   $("#dnd-stats-card")?.classList.add("hidden");
 }
 
-function playerAtPoint(norm) {
+function playerAtCanvasPoint(pt, m) {
   for (let i = lastState.length - 1; i >= 0; i--) {
     const p = lastState[i];
     if (p.connected === false) continue;
-    const radius = playerHitRadius(p);
-    if (Math.hypot(norm.x - p.x, norm.y - p.y) <= radius) return p;
+    const px = Math.max(8, m.cell * playerTokenSize(p));
+    const cx = m.ox + p.x * m.w;
+    const cy = m.oy + p.y * m.h;
+    if (Math.hypot(pt.x - cx, pt.y - cy) <= Math.max(14, px / 2)) return p;
   }
   return null;
 }
 
 function playerTokenSize(player) {
   return dndSharedState.playerSizes?.[player.id] || 1;
-}
-
-function playerHitRadius(player) {
-  const rect = canvas.getBoundingClientRect();
-  const px = Math.max(24, DND_CELL_PX * dndZoom * playerTokenSize(player) * 0.5);
-  return Math.max(0.025, px / Math.max(rect.width || 1, rect.height || 1));
 }
 
 function dndAssetCatalog() {
@@ -1271,22 +1273,28 @@ function dndBoardMetrics(rect) {
   const cell = DND_CELL_PX * dndZoom;
   const w = board.cols * cell;
   const h = board.rows * cell;
-  return { board, cell, w, h, ox: 0, oy: 0 };
+  if (!dndCam) dndCam = { x: board.cols / 2, y: board.rows / 2 };
+  dndCam.x = Math.max(0, Math.min(board.cols, dndCam.x));
+  dndCam.y = Math.max(0, Math.min(board.rows, dndCam.y));
+  const ox = rect.width / 2 - dndCam.x * cell;
+  const oy = rect.height / 2 - dndCam.y * cell;
+  return { board, cell, w, h, ox, oy };
+}
+
+function clampDndCam(cam) {
+  const board = dndSharedState.board || defaultDndState().board;
+  return { x: Math.max(0, Math.min(board.cols, cam.x)), y: Math.max(0, Math.min(board.rows, cam.y)) };
+}
+
+function clampDndZoom(zoom) {
+  return Math.max(DND_ZOOM_MIN, Math.min(DND_ZOOM_MAX, zoom));
 }
 
 function syncDndCanvasStyle() {
-  if (selectedGame !== "free-play") {
-    canvas.style.width = "";
-    canvas.style.height = "";
-    screens.play.classList.remove("dnd-board-active");
-    return;
-  }
-  const board = dndSharedState.board || defaultDndState().board;
-  const w = Math.round(board.cols * DND_CELL_PX * dndZoom);
-  const h = Math.round(board.rows * DND_CELL_PX * dndZoom);
-  canvas.style.width = `${w}px`;
-  canvas.style.height = `${h}px`;
-  screens.play.classList.add("dnd-board-active");
+  // The canvas always fills the viewport; the camera pans/zooms the board inside it.
+  canvas.style.width = "";
+  canvas.style.height = "";
+  screens.play.classList.remove("dnd-board-active");
 }
 
 function pointerToBoard(e) {
@@ -1459,7 +1467,9 @@ function applyDndAction(action, actorId = MY_ID, broadcast = true) {
     dndSharedState.grid = !!action.grid;
   } else if (action.type === "board") {
     dndSharedState.board = action.board;
+    dndViewInitialized = false;
   }
+  if (action.type === "state") dndViewInitialized = false;
   saveDndState();
   syncDndCanvasStyle();
   syncDndUi();
@@ -1625,10 +1635,33 @@ function setDndBoardSize() {
   sendDndAction({ type: "board", board: { cols, rows } });
 }
 
-function setDndZoom(next) {
-  dndZoom = Math.max(0.25, Math.min(2.25, next));
+function setDndZoom(next, focus = null) {
+  const rect = canvas.getBoundingClientRect();
+  next = clampDndZoom(next);
+  if (!rect.width || !rect.height || next === dndZoom) return;
+  const m = dndBoardMetrics(rect);
+  const fx = focus ? focus.x : rect.width / 2;
+  const fy = focus ? focus.y : rect.height / 2;
+  const boardX = (fx - m.ox) / m.cell;
+  const boardY = (fy - m.oy) / m.cell;
+  dndZoom = next;
+  const cell = DND_CELL_PX * dndZoom;
+  dndCam = clampDndCam({ x: boardX + (rect.width / 2 - fx) / cell, y: boardY + (rect.height / 2 - fy) / cell });
   localStorage.setItem(DND_ZOOM_KEY, String(dndZoom));
-  syncDndCanvasStyle();
+}
+
+function fitDndBoard() {
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const board = dndSharedState.board || defaultDndState().board;
+  const margin = 24;
+  const zoom = Math.min(
+    (rect.width - margin * 2) / (board.cols * DND_CELL_PX),
+    (rect.height - margin * 2) / (board.rows * DND_CELL_PX)
+  );
+  dndZoom = clampDndZoom(zoom);
+  localStorage.setItem(DND_ZOOM_KEY, String(dndZoom));
+  dndCam = { x: board.cols / 2, y: board.rows / 2 };
 }
 
 function syncDndUi() {
@@ -1673,6 +1706,7 @@ function showDndShortcutHelp() {
     "+ / =: make selected entity larger",
     "- / _: make selected entity smaller",
     "B: board size",
+    "F: fit board to screen",
     "R: roll dice",
     "Escape: close popup/tools",
     "?: show this help",
@@ -1721,6 +1755,9 @@ function handleDndKeyboard(e) {
   } else if (key === "b") {
     e.preventDefault();
     setDndBoardSize();
+  } else if (key === "f") {
+    e.preventDefault();
+    fitDndBoard();
   } else if (key === "r") {
     e.preventDefault();
     requestDiceRoll();
@@ -1844,10 +1881,11 @@ function hostCrown(id) {
   return id && id === currentHostId() ? "👑 " : "";
 }
 
-function colorAtPoint(point) {
-  const rect = syncCanvasSize();
-  const x = Math.max(0, Math.min(rect.width - 1, Math.round(point.x * rect.width)));
-  const y = Math.max(0, Math.min(rect.height - 1, Math.round(point.y * rect.height)));
+function colorAtCanvasPoint(pt) {
+  syncCanvasSize();
+  const dpr = window.devicePixelRatio || 1;
+  const x = Math.max(0, Math.min(canvas.width - 1, Math.round(pt.x * dpr)));
+  const y = Math.max(0, Math.min(canvas.height - 1, Math.round(pt.y * dpr)));
   const pixel = ctx.getImageData(x, y, 1, 1).data;
   return "#" + [pixel[0], pixel[1], pixel[2]].map((v) => v.toString(16).padStart(2, "0")).join("");
 }
@@ -1858,35 +1896,37 @@ function currentHostId() {
   return null;
 }
 
-function drawStroke(stroke, rect) {
+function drawStroke(stroke, m) {
   const points = stroke.points || [];
   if (points.length < 2) return;
+  const sx = (p) => m.ox + p.x * m.w;
+  const sy = (p) => m.oy + p.y * m.h;
   ctx.save();
   if (stroke.tool === "eraser") ctx.globalCompositeOperation = "destination-out";
   if (stroke.tool === "highlighter") ctx.globalAlpha = 0.38;
   ctx.strokeStyle = stroke.tool === "eraser" ? "#000" : (stroke.color || DRAW_DEFAULT_COLOR);
-  ctx.lineWidth = stroke.width || 4;
+  ctx.lineWidth = (stroke.width || 4) * dndZoom;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.beginPath();
-  ctx.moveTo(points[0].x * rect.width, points[0].y * rect.height);
+  ctx.moveTo(sx(points[0]), sy(points[0]));
   for (let i = 1; i < points.length - 1; i++) {
-    const midX = ((points[i].x + points[i + 1].x) / 2) * rect.width;
-    const midY = ((points[i].y + points[i + 1].y) / 2) * rect.height;
-    ctx.quadraticCurveTo(points[i].x * rect.width, points[i].y * rect.height, midX, midY);
+    const midX = (sx(points[i]) + sx(points[i + 1])) / 2;
+    const midY = (sy(points[i]) + sy(points[i + 1])) / 2;
+    ctx.quadraticCurveTo(sx(points[i]), sy(points[i]), midX, midY);
   }
   const last = points[points.length - 1];
-  ctx.lineTo(last.x * rect.width, last.y * rect.height);
+  ctx.lineTo(sx(last), sy(last));
   ctx.stroke();
   ctx.restore();
 }
 
-function drawDndPlayerToken(player, rect) {
+function drawDndPlayerToken(player, m) {
   if (player.connected === false) return;
   const size = playerTokenSize(player);
-  const px = Math.max(28, DND_CELL_PX * dndZoom * size);
-  const x = player.x * rect.width - px / 2;
-  const y = player.y * rect.height - px / 2;
+  const px = Math.max(8, m.cell * size);
+  const x = m.ox + player.x * m.w - px / 2;
+  const y = m.oy + player.y * m.h - px / 2;
   const selected = player.id === dndSelectedPlayerId;
   const isMe = player.id === MY_ID;
   ctx.save();
@@ -1918,13 +1958,12 @@ function drawDndPlayerToken(player, rect) {
   ctx.restore();
 }
 
-function renderDrawing(rect) {
-  for (const stroke of drawingStrokes) drawStroke(stroke, rect);
-  if (currentStroke) drawStroke(currentStroke, rect);
+function renderDrawing(m) {
+  for (const stroke of drawingStrokes) drawStroke(stroke, m);
+  if (currentStroke) drawStroke(currentStroke, m);
 }
 
-function renderDndBoard(rect) {
-  const m = dndBoardMetrics(rect);
+function renderDndBoard(rect, m) {
   ctx.save();
   ctx.fillStyle = dndSharedState.bg || "#182033";
   ctx.fillRect(m.ox, m.oy, m.w, m.h);
@@ -3371,6 +3410,36 @@ function pointerToNorm(e) {
   };
 }
 
+function pointerToCanvas(e) {
+  const rect = canvas.getBoundingClientRect();
+  const src = e.touches ? e.touches[0] : e;
+  return { x: src.clientX - rect.left, y: src.clientY - rect.top };
+}
+
+function pointerToBoardNorm(e) {
+  const rect = canvas.getBoundingClientRect();
+  const src = e.touches ? e.touches[0] : e;
+  const m = dndBoardMetrics(rect);
+  return {
+    x: clamp01((src.clientX - rect.left - m.ox) / m.w),
+    y: clamp01((src.clientY - rect.top - m.oy) / m.h),
+  };
+}
+
+function startPinch(e) {
+  const rect = canvas.getBoundingClientRect();
+  const [a, b] = [e.touches[0], e.touches[1]];
+  const cx = (a.clientX + b.clientX) / 2 - rect.left;
+  const cy = (a.clientY + b.clientY) / 2 - rect.top;
+  const m = dndBoardMetrics(rect);
+  return {
+    dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1,
+    zoom: dndZoom,
+    boardX: (cx - m.ox) / m.cell,
+    boardY: (cy - m.oy) / m.cell,
+  };
+}
+
 function pointerPressure(e) {
   const src = e.touches ? e.touches[0] : e;
   return clamp01(src.force || src.pressure || 0.5);
@@ -3380,7 +3449,18 @@ function onDown(e) {
   if (selectedGame !== "free-play") return;
   // Don't drag when a sheet or chat panel is open.
   if (profileOpen || chatOpen) return;
-  if (e.touches && e.touches.length > 1) return;
+  if (e.touches && e.touches.length > 1) {
+    // Second finger: switch to pinch-zoom and cancel any in-progress gesture.
+    e.preventDefault();
+    dndDrag = null;
+    dndPlayerDrag = null;
+    dndPan = null;
+    dndPointerDown = null;
+    drawing = false;
+    currentStroke = null;
+    dndPinch = startPinch(e);
+    return;
+  }
   const boardPoint = pointerToBoard(e);
   const asset = dndAssetAt(boardPoint);
   if (asset && !drawMode) {
@@ -3395,10 +3475,10 @@ function onDown(e) {
     sendDndAction({ type: "select", id: asset.id, additive: e.shiftKey });
     return;
   }
-  const player = playerAtPoint(pointerToNorm(e));
+  const player = playerAtCanvasPoint(pointerToCanvas(e), boardPoint.metrics);
   if (player && !drawMode) {
     e.preventDefault();
-    const point = pointerToNorm(e);
+    const point = pointerToBoardNorm(e);
     dndSelectedId = null;
     dndSelectedPlayerId = player.id;
     dndPointerDown = { kind: "player", entity: { ...player, kind: "player", stats: dndStatsForPlayer(player) }, x: boardPoint.x, y: boardPoint.y };
@@ -3410,27 +3490,59 @@ function onDown(e) {
   if (drawMode) {
     e.preventDefault();
     drawing = true;
-    const point = pointerToNorm(e);
+    const point = pointerToBoardNorm(e);
     if (drawTool === "eyedropper") {
-      setDrawColor(colorAtPoint(point));
+      setDrawColor(colorAtCanvasPoint(pointerToCanvas(e)));
       drawing = false;
       return;
     }
     const pressure = pointerPressure(e);
-    const width = drawTool === "eraser" ? drawSize * 3 : drawTool === "highlighter" ? drawSize * 3.2 : drawSize + pressure * 1.4;
+    const screenWidth = drawTool === "eraser" ? drawSize * 3 : drawTool === "highlighter" ? drawSize * 3.2 : drawSize + pressure * 1.4;
     currentStroke = {
       id: MY_ID + "-" + Date.now(),
       tool: drawTool,
       color: drawTool === "eraser" ? null : drawColor,
-      width,
+      width: screenWidth / (dndZoom || 1),
       points: [point],
     };
     return;
   }
+  // Empty space: pan the camera.
+  e.preventDefault();
+  const src = e.touches ? e.touches[0] : e;
+  dndBoardMetrics(canvas.getBoundingClientRect()); // ensures dndCam exists
+  dndPan = { startX: src.clientX, startY: src.clientY, camX: dndCam.x, camY: dndCam.y, moved: false };
 }
 function onMove(e) {
   if (selectedGame !== "free-play") return;
+  if (dndPinch && e.touches && e.touches.length > 1) {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const [a, b] = [e.touches[0], e.touches[1]];
+    const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1;
+    const cx = (a.clientX + b.clientX) / 2 - rect.left;
+    const cy = (a.clientY + b.clientY) / 2 - rect.top;
+    dndZoom = clampDndZoom(dndPinch.zoom * (dist / dndPinch.dist));
+    const cell = DND_CELL_PX * dndZoom;
+    dndCam = clampDndCam({
+      x: dndPinch.boardX + (rect.width / 2 - cx) / cell,
+      y: dndPinch.boardY + (rect.height / 2 - cy) / cell,
+    });
+    localStorage.setItem(DND_ZOOM_KEY, String(dndZoom));
+    return;
+  }
   if (e.touches && e.touches.length > 1) return;
+  if (dndPan) {
+    e.preventDefault();
+    const src = e.touches ? e.touches[0] : e;
+    const cell = DND_CELL_PX * dndZoom;
+    if (Math.hypot(src.clientX - dndPan.startX, src.clientY - dndPan.startY) > 6) dndPan.moved = true;
+    dndCam = clampDndCam({
+      x: dndPan.camX - (src.clientX - dndPan.startX) / cell,
+      y: dndPan.camY - (src.clientY - dndPan.startY) / cell,
+    });
+    return;
+  }
   if (dndDrag) {
     e.preventDefault();
     const point = pointerToBoard(e);
@@ -3446,7 +3558,7 @@ function onMove(e) {
   }
   if (dndPlayerDrag) {
     e.preventDefault();
-    const point = pointerToNorm(e);
+    const point = pointerToBoardNorm(e);
     const x = clamp01(point.x - dndPlayerDrag.dx);
     const y = clamp01(point.y - dndPlayerDrag.dy);
     const start = dndPointerDown?.entity;
@@ -3463,7 +3575,7 @@ function onMove(e) {
   dndHoverName = hover?.name || "";
   if (drawing && currentStroke) {
     e.preventDefault();
-    const point = pointerToNorm(e);
+    const point = pointerToBoardNorm(e);
     const last = currentStroke.points[currentStroke.points.length - 1];
     if (!last || Math.hypot(point.x - last.x, point.y - last.y) > 0.003) currentStroke.points.push(point);
     return;
@@ -3479,6 +3591,11 @@ function onMove(e) {
   }
 }
 function onUp(e) {
+  if (dndPinch) {
+    if (e?.touches && e.touches.length >= 2) { dndPinch = startPinch(e); return; }
+    dndPinch = null;
+    return;
+  }
   if (dndDrag) {
     const asset = dndSharedState.assets.find((a) => a.id === dndDrag.id);
     if (dndDrag.moved && isInventoryOpen() && pointerOverInventory(e)) {
@@ -3510,6 +3627,11 @@ function onUp(e) {
       }
     }
     if (!dndDrag.moved && asset) showDndStats({ ...asset, kind: asset.role || "asset" });
+  } else if (dndPan) {
+    if (!dndPan.moved && (dndSelectedId || dndSelectedIds.size || dndSelectedPlayerId)) {
+      sendDndAction({ type: "select", id: null });
+      hideDndStats();
+    }
   } else if (dndPlayerDrag) {
     if (!dndPlayerDrag.moved && dndPointerDown?.entity) showDndStats(dndPointerDown.entity);
   } else if (dndPointerDown?.entity) {
@@ -3518,6 +3640,7 @@ function onUp(e) {
   dndDrag = null;
   dndPlayerDrag = null;
   dndPointerDown = null;
+  dndPan = null;
   if (drawing && currentStroke) addDrawingStroke(currentStroke);
   drawing = false;
   currentStroke = null;
@@ -3532,6 +3655,11 @@ canvas.addEventListener("touchmove",  onMove, { passive: false });
 window.addEventListener("touchend",   onUp);
 window.addEventListener("touchcancel", onUp);
 window.addEventListener("keydown", handleDndKeyboard);
+canvas.addEventListener("wheel", (e) => {
+  if (selectedGame !== "free-play") return;
+  e.preventDefault();
+  setDndZoom(dndZoom * Math.exp(-e.deltaY * 0.0016), pointerToCanvas(e));
+}, { passive: false });
 canvas.addEventListener("dragover", (e) => {
   if (selectedGame !== "free-play" || !dndInventoryDrag) return;
   e.preventDefault();
@@ -3545,11 +3673,16 @@ canvas.addEventListener("drop", (e) => {
 
 function renderFreePlayFrame() {
   const rect = syncCanvasSize();
+  if (!dndViewInitialized && rect.width > 0 && rect.height > 0) {
+    fitDndBoard();
+    dndViewInitialized = true;
+  }
   ctx.clearRect(0, 0, rect.width, rect.height);
-  renderDndBoard(rect);
-  renderDrawing(rect);
+  const m = dndBoardMetrics(rect);
+  renderDndBoard(rect, m);
+  renderDrawing(m);
 
-  for (const p of lastState) drawDndPlayerToken(p, rect);
+  for (const p of lastState) drawDndPlayerToken(p, m);
   renderDiceOverlay(rect);
 }
 
@@ -3588,8 +3721,9 @@ $("#btn-dnd-remove")?.addEventListener("click", () => removeSelectedDndAsset());
 $("#btn-dnd-smaller")?.addEventListener("click", () => resizeSelectedDndAsset(-0.5));
 $("#btn-dnd-larger")?.addEventListener("click", () => resizeSelectedDndAsset(0.5));
 $("#btn-dnd-board")?.addEventListener("click", setDndBoardSize);
-$("#btn-dnd-zoom-out")?.addEventListener("click", () => setDndZoom(dndZoom - 0.15));
-$("#btn-dnd-zoom-in")?.addEventListener("click", () => setDndZoom(dndZoom + 0.15));
+$("#btn-dnd-zoom-out")?.addEventListener("click", () => setDndZoom(dndZoom / 1.25));
+$("#btn-dnd-zoom-in")?.addEventListener("click", () => setDndZoom(dndZoom * 1.25));
+$("#btn-dnd-fit")?.addEventListener("click", fitDndBoard);
 $("#btn-dnd-roll")?.addEventListener("click", requestDiceRoll);
 $("#btn-dnd-stats-close")?.addEventListener("click", hideDndStats);
 $("#btn-custom-asset-close")?.addEventListener("click", closeCustomAssetModal);

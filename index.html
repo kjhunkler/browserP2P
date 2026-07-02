@@ -8,7 +8,7 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/robot.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icons/robot.svg" />
-  <link rel="stylesheet" href="css/style.css?v=2.8.0" />
+  <link rel="stylesheet" href="css/style.css?v=2.8.1" />
 </head>
 <body>
   <nav id="top-navbar" class="top-navbar" aria-label="Main navigation">
@@ -113,6 +113,7 @@
             <button id="btn-dnd-board" class="dnd-tool-btn" type="button" aria-label="Set board size">Board</button>
             <button id="btn-dnd-zoom-out" class="dnd-tool-btn" type="button" aria-label="Zoom out">🔍−</button>
             <button id="btn-dnd-zoom-in" class="dnd-tool-btn" type="button" aria-label="Zoom in">🔍＋</button>
+            <button id="btn-dnd-fit" class="dnd-tool-btn" type="button" aria-label="Fit board to screen">Fit</button>
             <select id="dnd-dice" class="dnd-select" aria-label="Dice to roll">
               <option value="1d4">1d4</option>
               <option value="1d6">1d6</option>
@@ -218,7 +219,7 @@
       <div class="field-group app-update-group">
           <label>App</label>
           <div class="version-row">
-              <span>Version <strong id="app-version">2.8.0</strong></span>
+              <span>Version <strong id="app-version">2.8.1</strong></span>
               <button id="btn-check-update" class="btn btn-small" type="button">Check for updates</button>
           </div>
           <p id="update-status" class="status"></p>
@@ -311,8 +312,8 @@
   <!-- QR code rendering for the join link -->
   <script src="https://cdn.jsdelivr.net/gh/davidshimjs/qrcodejs/qrcode.min.js"></script>
 
-  <script src="js/peer-net.js?v=2.8.0"></script>
+  <script src="js/peer-net.js?v=2.8.1"></script>
   <!-- Game modules are lazy-loaded by app.js when a game is selected -->
-  <script src="js/app.js?v=2.8.0"></script>
+  <script src="js/app.js?v=2.8.1"></script>
 </body>
 </html>

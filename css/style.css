@@ -53,7 +53,7 @@ input, textarea, select {
   align-items: center;
   justify-content: center;
   gap: 18px;
-  height: calc(100% - var(--nav-h, 58px));
+  height: 100%;
   padding: 24px;
   text-align: center;
 }
@@ -337,7 +337,7 @@ input, textarea, select {
 }
 
 /* ===== Play screen ===== */
-#screen-play { padding: 0; justify-content: flex-start; align-items: flex-start; position: relative; gap:0; overflow: auto; }
+#screen-play { padding: 0; justify-content: flex-start; align-items: flex-start; position: relative; gap:0; overflow: hidden; }
 #game-select > option {color:black;}
 #stage {
     width: 100%;
@@ -345,13 +345,6 @@ input, textarea, select {
     min-height: 0;
     touch-action: none;
     background: radial-gradient(circle at 50% 40%, #1e1e34, #0d0d18);
-}
-
-#screen-play.dnd-board-active #stage {
-    flex: 0 0 auto;
-    max-width: none;
-    max-height: none;
-    touch-action: pan-x pan-y pinch-zoom;
 }
 
 .menu-icon-btn {
