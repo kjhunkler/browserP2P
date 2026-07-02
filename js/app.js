@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.7.5";
+const APP_VERSION = "2.8.0";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
@@ -558,7 +558,11 @@ wireNetEvents();
 
 function migrateFromHost(snapshotReason) {
   if (hasLeftLobby) return;
-  if (!autoMode) { alert("The host left. Game over."); location.reload(); return; }
+  if (!autoMode) {
+    showToast("The host left — returning to the menu…", "error", "🔌");
+    setTimeout(() => location.reload(), 1600);
+    return;
+  }
   keepPlayingAfterMigration = screens.play.classList.contains("active");
   migratingFromHostId = lastHostOrder[0] || null;
   pendingMigratedGameState = snapshotActiveGame(snapshotReason) || loadSavedGameState(selectedGame)?.state || null;
@@ -576,6 +580,7 @@ function handleHostClosed() {
   if (hasLeftLobby) return;
   if (!autoMode) {
     setStatus("The host left this lobby.");
+    showToast("The host left this lobby", "error", "🔌");
     clearCurrentLobby();
     stopHostLoop();
     net.destroy();
@@ -584,6 +589,24 @@ function handleHostClosed() {
     return;
   }
   migrateFromHost("host migration snapshot");
+}
+
+function markPeerDisconnected(peerId) {
+  const id = peerMap.get(peerId);
+  if (!id) return;
+  const p = players.get(id);
+  const name = p ? p.name : "Someone";
+  if (p) p.connected = false;
+  peerMap.delete(peerId);
+  liveVideoPeers.delete(id);
+  removeVideoTile(id);
+  markSilent(id);
+  pushSys(name + " left");
+  showToast(name + " left", "info", "👋");
+  net.broadcast({ t: "sys", text: name + " left" });
+  renderLobby();
+  updateHostedLobbyInfo();
+  notifyActiveGamePlayersChanged();
 }
 
 // ---- host-side message handling ----
@@ -600,7 +623,10 @@ function handleHostMsg(peerId, msg) {
     net.sendTo(peerId, { t: "video-list", live: liveVideoList() });
     pushSys(p.name + " joined");
     net.broadcast({ t: "sys", text: p.name + " joined" });
-    if (p.id !== MY_ID) notifyPlayerJoined(p.name);
+    if (p.id !== MY_ID) {
+      notifyPlayerJoined(p.name);
+      showToast(p.name + " joined", "success", "🎉");
+    }
     renderLobby();
     updateHostedLobbyInfo();
     notifyActiveGamePlayersChanged();
@@ -634,23 +660,6 @@ function handleHostMsg(peerId, msg) {
       p.color = msg.preferredColor;
       usedColors.add(p.color);
     }
-
-function markPeerDisconnected(peerId) {
-  const id = peerMap.get(peerId);
-  if (!id) return;
-  const p = players.get(id);
-  const name = p ? p.name : "Someone";
-  if (p) p.connected = false;
-  peerMap.delete(peerId);
-  liveVideoPeers.delete(id);
-  removeVideoTile(id);
-  markSilent(id);
-  pushSys(name + " left");
-  net.broadcast({ t: "sys", text: name + " left" });
-  renderLobby();
-  updateHostedLobbyInfo();
-  notifyActiveGamePlayersChanged();
-}
     profiles.set(id, { name: p.name, color: p.color, icon: p.icon });
     net.broadcast({ t: "profile", id, name: p.name, color: p.color, icon: p.icon });
     renderChat();
@@ -823,7 +832,13 @@ function handleClientMsg(msg) {
   } else if (msg.t === "sys") {
     pushSys(msg.text);
     const joined = msg.text.match(/^(.+) joined$/);
-    if (joined) notifyPlayerJoined(joined[1]);
+    const left = msg.text.match(/^(.+) left$/);
+    if (joined) {
+      notifyPlayerJoined(joined[1]);
+      showToast(msg.text, "success", "🎉");
+    } else if (left) {
+      showToast(msg.text, "info", "👋");
+    }
   }
 }
 
@@ -2147,7 +2162,7 @@ function rememberGamePlayed(game) {
 
 function rememberedGameOrDefault() {
   const saved = localStorage.getItem(LAST_GAME_KEY);
-  return saved && window.BP2PGames?.[saved] ? saved : null;
+  return saved && GAME_INFO[saved] ? saved : null;
 }
 
 function shouldRestorePlay() {
@@ -2159,7 +2174,7 @@ function setRestorePlay(value) {
 }
 
 function gameName(game) {
-  return window.BP2PGames?.[game]?.name || game;
+  return window.BP2PGames?.[game]?.name || GAME_INFO[game]?.name || game;
 }
 
 async function setGameMode(game, broadcast = true, restoredState = undefined, promptHost = true) {
@@ -2232,20 +2247,20 @@ function sendGameState({ game, state, peerId = null, fullOnly = false }) {
   else send();
 }
 
-const GAME_SCRIPTS = {
-  digger: "js/games/digger.js",
-  "air-hockey": "js/games/air-hockey.js",
-  "paint-panic": "js/games/paint-panic.js",
-  tower: "js/games/tower.js",
-  "snow-brawl": "js/games/snow-brawl.js",
-  "gentle-rain": "js/games/gentle-rain.js",
+const GAME_INFO = {
+  digger: { src: "js/games/digger.js", name: "Deep Digger" },
+  "air-hockey": { src: "js/games/air-hockey.js", name: "Air Hockey" },
+  "paint-panic": { src: "js/games/paint-panic.js", name: "Paint Panic" },
+  tower: { src: "js/games/tower.js", name: "Tower Tumble" },
+  "snow-brawl": { src: "js/games/snow-brawl.js", name: "Snow Brawl Royale" },
+  "gentle-rain": { src: "js/games/gentle-rain.js", name: "A Gentle Rain" },
 };
 
 const loadingGameScripts = new Map();
 
 function loadGameScript(game) {
   if (window.BP2PGames?.[game]) return Promise.resolve(true);
-  const src = GAME_SCRIPTS[game];
+  const src = GAME_INFO[game]?.src;
   if (!src) return Promise.resolve(false);
   if (loadingGameScripts.has(game)) return loadingGameScripts.get(game);
   const promise = new Promise((resolve) => {
@@ -2376,10 +2391,11 @@ function renderChat() {
     el.className = "chat-msg" + (isMe ? " mine" : "");
 
     if (entry.voice) continue; // voice messages no longer shown in thread
+    const time = entry.ts ? new Date(entry.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
     el.innerHTML = `
       <div class="msg-avatar" style="background:${pf.color}">${pf.icon}</div>
       <div class="msg-body">
-        <div class="msg-name" style="color:${pf.color}">${hostCrown(entry.fromId)}${esc(pf.name)}</div>
+        <div class="msg-name" style="color:${pf.color}">${hostCrown(entry.fromId)}${esc(pf.name)}${time ? `<span class="msg-time">${time}</span>` : ""}</div>
         <div class="msg-bubble">${esc(entry.text)}</div>
       </div>`;
     log.appendChild(el);
@@ -2909,6 +2925,7 @@ function openProfileSheet() {
   updateProfilePreview();
   syncTopNav();
   $("#sheet-profile").classList.add("open");
+  $("#scrim")?.classList.add("visible");
 }
 
 function toggleProfileSheet() {
@@ -2919,6 +2936,7 @@ function toggleProfileSheet() {
 function closeProfileSheet() {
   profileOpen = false;
   $("#sheet-profile")?.classList.remove("open");
+  $("#scrim")?.classList.remove("visible");
 }
 
 function leaveLobby() {
@@ -3138,6 +3156,7 @@ function renderLobby() {
     lobbyListKey = nextListKey;
   }
   $("#player-count").textContent = lobbyPlayers.length;
+  $("#lobby-empty-hint")?.classList.toggle("hidden", lobbyPlayers.length > 1);
   syncTopNav();
 }
 
@@ -3182,7 +3201,7 @@ function renderLobbyCards() {
       meta.textContent = "Checking for a host…";
       actionBtn.textContent = "Checking…";
       actionBtn.disabled = true;
-      actionBtn.className = "btn lobby-action-btn";
+      actionBtn.className = "btn lobby-action-btn checking";
     } else if (status.online) {
       meta.textContent = `${status.info?.name || "Someone"} is hosting · v${status.info?.version || "?"} · ${status.info?.players || 1} player${(status.info?.players || 1) === 1 ? "" : "s"}`;
       actionBtn.textContent = "Join";
@@ -3262,6 +3281,8 @@ function onlineUserButton(user, isMe) {
     else if (net.isHost && currentLobby?.code) {
       activity.sendInvite(user.id, { code: currentLobby.code, name: currentLobby.name });
       setStatus(`Invited ${user.name}.`);
+      showToast(`Invite sent to ${user.name}`, "success", "📨");
+      $("#online-dropdown")?.removeAttribute("open");
     }
   });
   return btn;
@@ -3293,6 +3314,39 @@ function setStatus(text) {
   const s = $("#join-status");
   if (s) s.textContent = text;
 }
+
+// ============================================================ TOASTS ========
+const TOAST_MS = 3200;
+function showToast(text, type = "info", icon = "") {
+  const stack = $("#toast-stack");
+  if (!stack) return;
+  while (stack.children.length >= 3) stack.firstElementChild.remove();
+  const el = document.createElement("div");
+  el.className = "toast" + (type && type !== "info" ? " " + type : "");
+  el.setAttribute("role", "status");
+  el.textContent = icon ? `${icon} ${text}` : text;
+  let dismissed = false;
+  const dismiss = () => {
+    if (dismissed) return;
+    dismissed = true;
+    el.classList.add("leaving");
+    setTimeout(() => el.remove(), 220);
+  };
+  el.addEventListener("click", dismiss);
+  stack.appendChild(el);
+  setTimeout(dismiss, TOAST_MS);
+}
+
+// Keep --nav-h in sync with the real navbar height (safe-area insets on
+// notched phones make it taller than the 58px fallback).
+const topNavEl = $("#top-navbar");
+function syncNavHeight() {
+  const h = Math.ceil(topNavEl?.getBoundingClientRect().height || 58);
+  document.documentElement.style.setProperty("--nav-h", `${h}px`);
+}
+if (topNavEl && "ResizeObserver" in window) new ResizeObserver(syncNavHeight).observe(topNavEl);
+window.addEventListener("resize", syncNavHeight);
+syncNavHeight();
 
 function syncCanvasSize() {
   const rect = canvas.getBoundingClientRect();
@@ -3578,6 +3632,7 @@ $("#btn-share-lobby")?.addEventListener("click", async () => {
     if (navigator.share) await navigator.share({ title: "ClasslessRPG lobby", text: `Join my ClasslessRPG lobby: ${code}`, url });
     else await navigator.clipboard.writeText(url);
     $("#settings-lobby-status").textContent = "Lobby link shared.";
+    showToast("Lobby link shared", "success", "🔗");
   } catch {
     $("#settings-lobby-status").textContent = url;
   }
@@ -3586,6 +3641,15 @@ $("#btn-keep-awake").addEventListener("click", toggleKeepAwake);
 syncWakeUi();
 $("#btn-enable-notifications").addEventListener("click", enableJoinNotifications);
 syncNotificationUi();
+
+// Escape closes the topmost overlay (modal > settings > chat).
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!$("#modal-custom-asset")?.classList.contains("hidden")) { closeCustomAssetModal(); return; }
+  if (profileOpen) { closeProfileSheet(); return; }
+  if (chatOpen) closeChat();
+});
+$("#scrim")?.addEventListener("click", closeProfileSheet);
 
 // ============================================================ CHAT ACTIONS ==
 $("#btn-chat").addEventListener("click", toggleChat);

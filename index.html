@@ -8,7 +8,7 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/robot.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icons/robot.svg" />
-  <link rel="stylesheet" href="css/style.css?v=2.7.5" />
+  <link rel="stylesheet" href="css/style.css?v=2.8.0" />
 </head>
 <body>
   <nav id="top-navbar" class="top-navbar" aria-label="Main navigation">
@@ -69,6 +69,7 @@
 
       <h3><span id="player-count">0</span> in the lobby</h3>
       <ul id="player-list" class="player-list"></ul>
+      <p id="lobby-empty-hint" class="lobby-empty-hint">Waiting for players — share the code or QR above ✨</p>
 
       <button id="btn-start" class="btn btn-primary">Start</button>
       <button id="btn-lobby-settings" class="hud-btn hud-top-left" aria-label="Settings">⚙️</button>
@@ -153,6 +154,12 @@
 
   </div>
 
+  <!-- ===== Scrim behind overlays ===== -->
+  <div id="scrim" class="scrim" aria-hidden="true"></div>
+
+  <!-- ===== Toast notifications ===== -->
+  <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
+
   <!-- ===== Settings sheet (slides in from right) ===== -->
   <div id="sheet-profile" class="sheet" aria-hidden="true">
       <div class="sheet-header">
@@ -211,7 +218,7 @@
       <div class="field-group app-update-group">
           <label>App</label>
           <div class="version-row">
-              <span>Version <strong id="app-version">2.7.5</strong></span>
+              <span>Version <strong id="app-version">2.8.0</strong></span>
               <button id="btn-check-update" class="btn btn-small" type="button">Check for updates</button>
           </div>
           <p id="update-status" class="status"></p>
@@ -304,13 +311,8 @@
   <!-- QR code rendering for the join link -->
   <script src="https://cdn.jsdelivr.net/gh/davidshimjs/qrcodejs/qrcode.min.js"></script>
 
-  <script src="js/peer-net.js?v=2.7.5"></script>
-  <script src="js/games/digger.js?v=2.7.5"></script>
-  <script src="js/games/air-hockey.js?v=2.7.5"></script>
-  <script src="js/games/paint-panic.js?v=2.7.5"></script>
-  <script src="js/games/tower.js?v=2.7.5"></script>
-  <script src="js/games/snow-brawl.js?v=2.7.5"></script>
-  <script src="js/games/gentle-rain.js?v=2.7.5"></script>
-  <script src="js/app.js?v=2.7.5"></script>
+  <script src="js/peer-net.js?v=2.8.0"></script>
+  <!-- Game modules are lazy-loaded by app.js when a game is selected -->
+  <script src="js/app.js?v=2.8.0"></script>
 </body>
 </html>
