@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.8.1";
+const APP_VERSION = "2.9.0";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
@@ -687,6 +687,14 @@ function handleHostMsg(peerId, msg) {
     const id = peerMap.get(peerId);
     if (id) rollDiceForPlayer(id, msg.formula);
 
+  } else if (msg.t === "dnd-ping") {
+    if (msg.ping) {
+      addBoardPing(msg.ping);
+      for (const [targetPeerId, conn] of net.conns) {
+        if (targetPeerId !== peerId && conn.open) conn.send({ t: "dnd-ping", ping: msg.ping });
+      }
+    }
+
   } else if (msg.t === "draw-clear") {
     clearDrawing(false);
     net.broadcast({ t: "draw-clear" });
@@ -798,6 +806,9 @@ function handleClientMsg(msg) {
 
   } else if (msg.t === "dnd-roll") {
     showDiceRoll(msg.roll);
+
+  } else if (msg.t === "dnd-ping") {
+    if (msg.ping) addBoardPing(msg.ping);
 
   } else if (msg.t === "draw-clear") {
     clearDrawing(false);
@@ -1049,6 +1060,10 @@ let dndCam = null; // board-cell coords of the viewport center
 let dndPan = null; // active empty-space pan gesture
 let dndPinch = null; // active two-finger pinch gesture
 let dndViewInitialized = false; // fit board on the first rendered frame
+let measureMode = false;
+let measureLine = null; // { x1, y1, x2, y2 } in board cells
+let activePings = []; // { x, y, color, name, start } in board cells
+let lastTapInfo = null; // for double-tap ping detection
 let activeDiceRoll = null;
 let dndPointerDown = null;
 
@@ -1161,15 +1176,43 @@ function showDndStats(entity) {
   card.dataset.kind = entity.kind || entity.role || "entity";
   card.dataset.id = entity.id || "";
   $("#dnd-stats-name").textContent = entity.name || "Unknown";
-  $("#dnd-stats-type").textContent = `${entity.kind || entity.role || "entity"} • Level ${stats.level || 1} • AC ${stats.ac || 10}`;
+  $("#dnd-stats-type").textContent = entity.kind || entity.role || "entity";
+  $("#dnd-stats-chips").innerHTML = `
+    <span class="dnd-chip"><span>LVL</span>${stats.level || 1}</span>
+    <span class="dnd-chip"><span>AC</span>${stats.ac || 10}</span>
+    <span class="dnd-chip"><span>SPD</span>${stats.speed || 30} ft</span>`;
   $("#dnd-stats-bars").innerHTML = `
     <div class="dnd-stat-bar-row"><span>HP</span><div class="dnd-stat-bar"><i style="width:${Math.round(statPercent(stats.hp, stats.maxHp) * 100)}%;background:#ff5d5d"></i></div><b>${stats.hp}/${stats.maxHp}</b></div>
     ${stats.maxMana > 0 ? `<div class="dnd-stat-bar-row"><span>Mana</span><div class="dnd-stat-bar"><i style="width:${Math.round(statPercent(stats.mana, stats.maxMana) * 100)}%;background:#4dd2ff"></i></div><b>${stats.mana}/${stats.maxMana}</b></div>` : ""}`;
+  buildQuickHpButtons(entity, stats);
   $("#dnd-stats-abilities").innerHTML = DND_ABILITIES.map((key) => `
     <div class="dnd-ability"><span>${key.toUpperCase()}</span><strong>${stats.abilities?.[key] ?? 10}</strong><em>${modText(stats.abilities?.[key] ?? 10)}</em></div>`).join("");
-  $("#dnd-stats-details").textContent = `Speed ${stats.speed || 30} ft${entity.ownerId ? " • Owner token" : ""}`;
+  $("#dnd-stats-editor")?.classList.add("hidden");
   buildDndStatsEditor(entity, stats);
   card.classList.remove("hidden");
+}
+
+function applyHpDelta(entity, delta) {
+  const base = entity.kind === "player" ? dndStatsForPlayer(entity) : (entity.stats || statBlock(entity.statPreset));
+  const stats = { ...base, abilities: { ...(base.abilities || {}) } };
+  stats.hp = Math.max(0, Math.min(stats.maxHp || 1, (Number(stats.hp) || 0) + delta));
+  sendDndAction({ type: "stats", kind: entity.kind === "player" ? "player" : "asset", id: entity.id, stats });
+  showDndStats({ ...entity, stats });
+}
+
+function buildQuickHpButtons(entity, stats) {
+  const quick = $("#dnd-stats-quick");
+  if (!quick) return;
+  quick.innerHTML = "";
+  if (!entity.id) return;
+  for (const delta of [-5, -1, 1, 5]) {
+    const btn = document.createElement("button");
+    btn.className = "dnd-quick-btn" + (delta > 0 ? " heal" : "");
+    btn.type = "button";
+    btn.textContent = (delta > 0 ? "+" : "") + delta + " HP";
+    btn.addEventListener("click", () => applyHpDelta({ ...entity, stats }, delta));
+    quick.appendChild(btn);
+  }
 }
 
 function buildDndStatsEditor(entity, stats) {
@@ -1194,8 +1237,18 @@ function buildDndStatsEditor(entity, stats) {
     wrap.appendChild(input);
     editor.appendChild(wrap);
   }
+  const toggle = document.createElement("button");
+  toggle.className = "btn btn-small";
+  toggle.type = "button";
+  toggle.textContent = "Edit stats";
+  toggle.addEventListener("click", () => {
+    const hidden = editor.classList.toggle("hidden");
+    toggle.textContent = hidden ? "Edit stats" : "Hide editor";
+    save.classList.toggle("hidden", hidden);
+  });
+  actions.appendChild(toggle);
   const save = document.createElement("button");
-  save.className = "btn btn-small btn-primary";
+  save.className = "btn btn-small btn-primary hidden";
   save.type = "button";
   save.textContent = "Save stats";
   save.addEventListener("click", () => saveDndStatsFromEditor(entity));
@@ -1321,6 +1374,28 @@ function sendDndAction(action) {
   else net.send({ t: "dnd-action", action });
 }
 
+function dndPointerUpBoardPoint(e) {
+  if (!e) return null;
+  const src = e.changedTouches ? e.changedTouches[0] : e;
+  if (src.clientX === undefined) return null;
+  const rect = canvas.getBoundingClientRect();
+  const m = dndBoardMetrics(rect);
+  return { x: (src.clientX - rect.left - m.ox) / m.cell, y: (src.clientY - rect.top - m.oy) / m.cell };
+}
+
+function sendBoardPing(pt) {
+  const ping = { x: pt.x, y: pt.y, color: myColor || profile.color || COLORS[0], name: profile.name };
+  addBoardPing(ping);
+  const msg = { t: "dnd-ping", ping };
+  if (net.isHost) net.broadcast(msg);
+  else net.send(msg);
+}
+
+function addBoardPing(ping) {
+  activePings.push({ ...ping, start: performance.now() });
+  if (activePings.length > 12) activePings.shift();
+}
+
 function cloneAsset(asset, overrides = {}) {
   return { ...JSON.parse(JSON.stringify(asset)), ...overrides };
 }
@@ -1345,9 +1420,14 @@ function isInventoryOpen() {
   return !$("#inventory-panel")?.classList.contains("hidden");
 }
 
-function setInventoryOpen(open) {
+function setInventoryOpen(open, closeOthers = true) {
+  if (open && closeOthers) {
+    drawMode = false;
+    dndOpen = false;
+    setMeasureMode(false);
+  }
   $("#inventory-panel")?.classList.toggle("hidden", !open);
-  $("#btn-inventory")?.classList.toggle("active", open);
+  if (open || closeOthers) syncBoardDock();
   renderInventory();
 }
 
@@ -1664,11 +1744,27 @@ function fitDndBoard() {
   dndCam = { x: board.cols / 2, y: board.rows / 2 };
 }
 
-function syncDndUi() {
+function syncBoardDock() {
+  const inFreePlay = selectedGame === "free-play";
+  $("#board-dock")?.classList.toggle("hidden", !inFreePlay);
+  $("#btn-draw")?.classList.toggle("active", drawMode);
   $("#btn-dnd")?.classList.toggle("active", dndOpen);
-  $("#dnd-dock")?.classList.toggle("hidden", selectedGame !== "free-play");
-  $("#inventory-dock")?.classList.toggle("hidden", selectedGame !== "free-play");
-  $("#dnd-toolbar")?.classList.toggle("hidden", !dndOpen);
+  $("#btn-inventory")?.classList.toggle("active", isInventoryOpen());
+  $("#draw-toolbar")?.classList.toggle("hidden", !inFreePlay || !drawMode);
+  $("#dnd-toolbar")?.classList.toggle("hidden", !inFreePlay || !dndOpen);
+  if (!inFreePlay) $("#inventory-panel")?.classList.add("hidden");
+  $("#btn-dnd-measure")?.classList.toggle("active", measureMode);
+  syncDrawToolUi();
+}
+
+function setMeasureMode(enabled) {
+  measureMode = !!enabled && selectedGame === "free-play";
+  if (!measureMode) measureLine = null;
+  $("#btn-dnd-measure")?.classList.toggle("active", measureMode);
+}
+
+function syncDndUi() {
+  syncBoardDock();
   $("#btn-dnd-grid")?.classList.toggle("active", !!dndSharedState.grid);
   const hasAsset = !!dndSelectedId;
   const hasEntity = hasAsset || !!dndSelectedPlayerId;
@@ -1707,6 +1803,8 @@ function showDndShortcutHelp() {
     "- / _: make selected entity smaller",
     "B: board size",
     "F: fit board to screen",
+    "M: measure distance",
+    "Double-tap empty space: ping for everyone",
     "R: roll dice",
     "Escape: close popup/tools",
     "?: show this help",
@@ -1758,11 +1856,15 @@ function handleDndKeyboard(e) {
   } else if (key === "f") {
     e.preventDefault();
     fitDndBoard();
+  } else if (key === "m") {
+    e.preventDefault();
+    setMeasureMode(!measureMode);
   } else if (key === "r") {
     e.preventDefault();
     requestDiceRoll();
   } else if (key === "Escape") {
     e.preventDefault();
+    if (measureMode) { setMeasureMode(false); return; }
     hideDndStats();
     setDndOpen(false);
   } else if (key === "?") {
@@ -2076,14 +2178,20 @@ function roundRect(context, x, y, w, h, r) {
 function setDrawMode(enabled) {
   if (selectedGame !== "free-play") enabled = false;
   drawMode = enabled;
-  $("#btn-draw")?.classList.toggle("active", drawMode);
-  $("#draw-dock")?.classList.toggle("hidden", selectedGame !== "free-play");
-  $("#draw-toolbar")?.classList.toggle("hidden", !drawMode);
-  syncDrawToolUi();
+  if (enabled) {
+    dndOpen = false;
+    setInventoryOpen(false, false);
+    setMeasureMode(false);
+  }
+  syncBoardDock();
 }
 
 function setDndOpen(enabled) {
   dndOpen = selectedGame === "free-play" && enabled;
+  if (dndOpen) {
+    drawMode = false;
+    setInventoryOpen(false, false);
+  }
   syncDndUi();
 }
 
@@ -3462,6 +3570,12 @@ function onDown(e) {
     return;
   }
   const boardPoint = pointerToBoard(e);
+  if (measureMode) {
+    e.preventDefault();
+    measureLine = { x1: boardPoint.x, y1: boardPoint.y, x2: boardPoint.x, y2: boardPoint.y, active: true };
+    return;
+  }
+  // Double-tap/click on empty space pings that board spot for everyone.
   const asset = dndAssetAt(boardPoint);
   if (asset && !drawMode) {
     e.preventDefault();
@@ -3532,6 +3646,13 @@ function onMove(e) {
     return;
   }
   if (e.touches && e.touches.length > 1) return;
+  if (measureLine?.active) {
+    e.preventDefault();
+    const point = pointerToBoard(e);
+    measureLine.x2 = point.x;
+    measureLine.y2 = point.y;
+    return;
+  }
   if (dndPan) {
     e.preventDefault();
     const src = e.touches ? e.touches[0] : e;
@@ -3591,6 +3712,10 @@ function onMove(e) {
   }
 }
 function onUp(e) {
+  if (measureLine?.active) {
+    measureLine.active = false;
+    return;
+  }
   if (dndPinch) {
     if (e?.touches && e.touches.length >= 2) { dndPinch = startPinch(e); return; }
     dndPinch = null;
@@ -3628,9 +3753,20 @@ function onUp(e) {
     }
     if (!dndDrag.moved && asset) showDndStats({ ...asset, kind: asset.role || "asset" });
   } else if (dndPan) {
-    if (!dndPan.moved && (dndSelectedId || dndSelectedIds.size || dndSelectedPlayerId)) {
-      sendDndAction({ type: "select", id: null });
-      hideDndStats();
+    if (!dndPan.moved) {
+      const now = Date.now();
+      const pt = dndPointerUpBoardPoint(e);
+      if (pt && lastTapInfo && now - lastTapInfo.t < 420 && Math.hypot(pt.x - lastTapInfo.x, pt.y - lastTapInfo.y) < 1.2) {
+        sendBoardPing(pt);
+        lastTapInfo = null;
+      } else {
+        lastTapInfo = pt ? { x: pt.x, y: pt.y, t: now } : null;
+      }
+      if (dndSelectedId || dndSelectedIds.size || dndSelectedPlayerId) {
+        sendDndAction({ type: "select", id: null });
+        hideDndStats();
+      }
+      if (measureLine && !measureMode) measureLine = null;
     }
   } else if (dndPlayerDrag) {
     if (!dndPlayerDrag.moved && dndPointerDown?.entity) showDndStats(dndPointerDown.entity);
@@ -3671,6 +3807,79 @@ canvas.addEventListener("drop", (e) => {
   dndInventoryDrag = null;
 });
 
+function renderMeasureLine(m) {
+  if (!measureLine) return;
+  const x1 = m.ox + measureLine.x1 * m.cell;
+  const y1 = m.oy + measureLine.y1 * m.cell;
+  const x2 = m.ox + measureLine.x2 * m.cell;
+  const y2 = m.oy + measureLine.y2 * m.cell;
+  const cells = Math.hypot(measureLine.x2 - measureLine.x1, measureLine.y2 - measureLine.y1);
+  const feet = Math.round(cells * DND_GRID_FT);
+  ctx.save();
+  ctx.strokeStyle = "#ffd24d";
+  ctx.lineWidth = 2.5;
+  ctx.setLineDash([8, 6]);
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  for (const [px, py] of [[x1, y1], [x2, y2]]) {
+    ctx.beginPath();
+    ctx.arc(px, py, 5, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffd24d";
+    ctx.fill();
+  }
+  if (cells > 0.05) {
+    const midX = (x1 + x2) / 2;
+    const midY = (y1 + y2) / 2;
+    const label = `${feet} ft`;
+    ctx.font = "800 13px system-ui, sans-serif";
+    const tw = ctx.measureText(label).width + 16;
+    ctx.fillStyle = "rgba(0,0,0,0.78)";
+    roundRect(ctx, midX - tw / 2, midY - 24, tw, 22, 11);
+    ctx.fill();
+    ctx.fillStyle = "#ffd24d";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, midX, midY - 13);
+  }
+  ctx.restore();
+}
+
+const PING_MS = 2200;
+function renderPings(m) {
+  if (!activePings.length) return;
+  const now = performance.now();
+  activePings = activePings.filter((p) => now - p.start < PING_MS);
+  for (const ping of activePings) {
+    const t = (now - ping.start) / PING_MS;
+    const x = m.ox + ping.x * m.cell;
+    const y = m.oy + ping.y * m.cell;
+    const wave = (t * 3) % 1;
+    ctx.save();
+    ctx.strokeStyle = ping.color || "#4dd2ff";
+    ctx.globalAlpha = (1 - wave) * (1 - t * 0.5);
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(x, y, 6 + wave * 34, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1 - t * 0.6;
+    ctx.fillStyle = ping.color || "#4dd2ff";
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    if (ping.name) {
+      ctx.font = "800 11px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      ctx.fillStyle = "rgba(255,255,255,0.92)";
+      ctx.fillText(ping.name, x, y - 12);
+    }
+    ctx.restore();
+  }
+}
+
 function renderFreePlayFrame() {
   const rect = syncCanvasSize();
   if (!dndViewInitialized && rect.width > 0 && rect.height > 0) {
@@ -3683,6 +3892,8 @@ function renderFreePlayFrame() {
   renderDrawing(m);
 
   for (const p of lastState) drawDndPlayerToken(p, m);
+  renderMeasureLine(m);
+  renderPings(m);
   renderDiceOverlay(rect);
 }
 
@@ -3712,6 +3923,7 @@ $("#btn-dnd")?.addEventListener("click", () => setDndOpen(!dndOpen));
 $("#btn-inventory")?.addEventListener("click", () => setInventoryOpen(!isInventoryOpen()));
 $("#btn-inventory-close")?.addEventListener("click", () => setInventoryOpen(false));
 $("#btn-dnd-grid")?.addEventListener("click", () => sendDndAction({ type: "grid", grid: !dndSharedState.grid }));
+$("#btn-dnd-measure")?.addEventListener("click", () => setMeasureMode(!measureMode));
 $("#dnd-scene")?.addEventListener("change", (e) => setDndScene(e.target.value));
 $("#btn-dnd-add")?.addEventListener("click", addSelectedDndAsset);
 $("#btn-dnd-custom")?.addEventListener("click", createCustomDndAsset);

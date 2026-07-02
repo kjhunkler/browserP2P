@@ -8,7 +8,7 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/robot.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icons/robot.svg" />
-  <link rel="stylesheet" href="css/style.css?v=2.8.1" />
+  <link rel="stylesheet" href="css/style.css?v=2.9.0" />
 </head>
 <body>
   <nav id="top-navbar" class="top-navbar" aria-label="Main navigation">
@@ -77,14 +77,20 @@
 
     <!-- ===== Play ===== -->
     <section id="screen-play" class="screen">
-      <div id="draw-dock" class="draw-dock" aria-label="Drawing tools">
-        <button id="btn-draw" class="draw-main-btn" aria-label="Draw mode" type="button">✏️</button>
-        <div id="draw-toolbar" class="draw-toolbar hidden" aria-label="Drawing tools">
+      <div id="board-dock" class="board-dock hidden" aria-label="Board tools">
+        <button id="btn-draw" class="dock-btn" aria-label="Draw mode" type="button">✏️</button>
+        <button id="btn-dnd" class="dock-btn" aria-label="Board tools" type="button">⚔️</button>
+        <button id="btn-inventory" class="dock-btn" aria-label="Inventory" type="button">💰</button>
+      </div>
+      <div id="draw-toolbar" class="tool-panel hidden" aria-label="Drawing tools">
+        <div class="tool-group">
           <button id="btn-draw-pen" class="draw-tool-btn active" type="button" aria-label="Pen">✏️</button>
           <button id="btn-draw-highlighter" class="draw-tool-btn" type="button" aria-label="Highlighter">🖍️</button>
           <button id="btn-draw-eraser" class="draw-tool-btn" type="button" aria-label="Eraser">🧽</button>
           <button id="btn-draw-eyedropper" class="draw-tool-btn" type="button" aria-label="Eyedropper">💧</button>
           <input id="draw-color" class="draw-color-input" type="color" value="#ffffff" aria-label="Drawing color" />
+        </div>
+        <div class="tool-group">
           <label class="draw-size-control" for="draw-size" aria-label="Brush size">
             <span>Size</span>
             <input id="draw-size" type="range" min="1" max="28" step="1" value="4" />
@@ -94,39 +100,43 @@
           <button id="btn-draw-clear" class="draw-tool-btn draw-clear-btn" type="button" aria-label="Clear all drawings">🗑️</button>
         </div>
       </div>
-        <div id="inventory-dock" class="inventory-dock hidden" aria-label="Inventory">
-          <button id="btn-inventory" class="draw-main-btn" aria-label="Inventory" type="button">💰</button>
+      <div id="dnd-toolbar" class="tool-panel hidden" aria-label="Board tools">
+        <div class="tool-group-label">Board</div>
+        <div class="tool-group">
+          <button id="btn-dnd-grid" class="dnd-tool-btn" type="button" aria-label="Toggle 5 ft grid">Grid</button>
+          <button id="btn-dnd-measure" class="dnd-tool-btn" type="button" aria-label="Measure distance">📏</button>
+          <button id="btn-dnd-board" class="dnd-tool-btn" type="button" aria-label="Set board size">Board</button>
+          <button id="btn-dnd-zoom-out" class="dnd-tool-btn" type="button" aria-label="Zoom out">🔍−</button>
+          <button id="btn-dnd-zoom-in" class="dnd-tool-btn" type="button" aria-label="Zoom in">🔍＋</button>
+          <button id="btn-dnd-fit" class="dnd-tool-btn" type="button" aria-label="Fit board to screen">Fit</button>
         </div>
-        <div id="dnd-dock" class="dnd-dock" aria-label="DnD board tools">
-          <button id="btn-dnd" class="draw-main-btn" aria-label="DnD tools" type="button">⚔️</button>
-          <div id="dnd-toolbar" class="dnd-toolbar hidden" aria-label="DnD tools">
-            <button id="btn-dnd-grid" class="dnd-tool-btn" type="button" aria-label="Toggle 5 ft grid">Grid</button>
-            <select id="dnd-scene" class="dnd-select" aria-label="Pre-built scene"></select>
-            <select id="dnd-asset" class="dnd-select" aria-label="Asset library"></select>
-            <button id="btn-dnd-add" class="dnd-tool-btn" type="button" aria-label="Add selected asset">Add</button>
-            <button id="btn-dnd-custom" class="dnd-tool-btn" type="button" aria-label="Create asset">New</button>
-            <button id="btn-dnd-save" class="dnd-tool-btn" type="button" aria-label="Save selected asset to local library">Save</button>
-            <button id="btn-dnd-duplicate" class="dnd-tool-btn" type="button" aria-label="Duplicate selected entity">Copy</button>
-            <button id="btn-dnd-remove" class="dnd-tool-btn dnd-danger-btn" type="button" aria-label="Remove selected entity">Remove</button>
-            <button id="btn-dnd-smaller" class="dnd-tool-btn" type="button" aria-label="Make selected asset smaller">−</button>
-            <button id="btn-dnd-larger" class="dnd-tool-btn" type="button" aria-label="Make selected asset larger">＋</button>
-            <button id="btn-dnd-board" class="dnd-tool-btn" type="button" aria-label="Set board size">Board</button>
-            <button id="btn-dnd-zoom-out" class="dnd-tool-btn" type="button" aria-label="Zoom out">🔍−</button>
-            <button id="btn-dnd-zoom-in" class="dnd-tool-btn" type="button" aria-label="Zoom in">🔍＋</button>
-            <button id="btn-dnd-fit" class="dnd-tool-btn" type="button" aria-label="Fit board to screen">Fit</button>
-            <select id="dnd-dice" class="dnd-select" aria-label="Dice to roll">
-              <option value="1d4">1d4</option>
-              <option value="1d6">1d6</option>
-              <option value="1d8">1d8</option>
-              <option value="1d10">1d10</option>
-              <option value="1d12">1d12</option>
-              <option value="1d20" selected>1d20</option>
-              <option value="2d20">2d20</option>
-              <option value="1d100">1d100</option>
-            </select>
-            <button id="btn-dnd-roll" class="dnd-tool-btn dnd-roll-btn" type="button" aria-label="Roll dice">Roll</button>
-          </div>
+        <div class="tool-group-label">Tokens</div>
+        <div class="tool-group">
+          <select id="dnd-scene" class="dnd-select" aria-label="Pre-built scene"></select>
+          <select id="dnd-asset" class="dnd-select" aria-label="Asset library"></select>
+          <button id="btn-dnd-add" class="dnd-tool-btn" type="button" aria-label="Add selected asset">Add</button>
+          <button id="btn-dnd-custom" class="dnd-tool-btn" type="button" aria-label="Create asset">New</button>
+          <button id="btn-dnd-save" class="dnd-tool-btn" type="button" aria-label="Save selected asset to local library">Save</button>
+          <button id="btn-dnd-duplicate" class="dnd-tool-btn" type="button" aria-label="Duplicate selected entity">Copy</button>
+          <button id="btn-dnd-remove" class="dnd-tool-btn dnd-danger-btn" type="button" aria-label="Remove selected entity">Remove</button>
+          <button id="btn-dnd-smaller" class="dnd-tool-btn" type="button" aria-label="Make selected asset smaller">−</button>
+          <button id="btn-dnd-larger" class="dnd-tool-btn" type="button" aria-label="Make selected asset larger">＋</button>
         </div>
+        <div class="tool-group-label">Dice</div>
+        <div class="tool-group">
+          <select id="dnd-dice" class="dnd-select" aria-label="Dice to roll">
+            <option value="1d4">1d4</option>
+            <option value="1d6">1d6</option>
+            <option value="1d8">1d8</option>
+            <option value="1d10">1d10</option>
+            <option value="1d12">1d12</option>
+            <option value="1d20" selected>1d20</option>
+            <option value="2d20">2d20</option>
+            <option value="1d100">1d100</option>
+          </select>
+          <button id="btn-dnd-roll" class="dnd-tool-btn dnd-roll-btn" type="button" aria-label="Roll dice">Roll</button>
+        </div>
+      </div>
       <div id="inventory-panel" class="inventory-panel hidden" aria-label="Local inventory">
         <div class="inventory-header">
           <span>Inventory</span>
@@ -145,10 +155,11 @@
           </div>
           <button id="btn-dnd-stats-close" class="close-btn" aria-label="Close stats">✕</button>
         </div>
+        <div id="dnd-stats-chips" class="dnd-stats-chips"></div>
         <div id="dnd-stats-bars" class="dnd-stats-bars"></div>
+        <div id="dnd-stats-quick" class="dnd-stats-quick"></div>
         <div id="dnd-stats-abilities" class="dnd-stats-abilities"></div>
-        <div id="dnd-stats-details" class="dnd-stats-details"></div>
-        <div id="dnd-stats-editor" class="dnd-stats-editor"></div>
+        <div id="dnd-stats-editor" class="dnd-stats-editor hidden"></div>
         <div id="dnd-stats-actions" class="dnd-stats-actions"></div>
       </div>
     </section>
@@ -219,7 +230,7 @@
       <div class="field-group app-update-group">
           <label>App</label>
           <div class="version-row">
-              <span>Version <strong id="app-version">2.8.1</strong></span>
+              <span>Version <strong id="app-version">2.9.0</strong></span>
               <button id="btn-check-update" class="btn btn-small" type="button">Check for updates</button>
           </div>
           <p id="update-status" class="status"></p>
@@ -312,8 +323,8 @@
   <!-- QR code rendering for the join link -->
   <script src="https://cdn.jsdelivr.net/gh/davidshimjs/qrcodejs/qrcode.min.js"></script>
 
-  <script src="js/peer-net.js?v=2.8.1"></script>
+  <script src="js/peer-net.js?v=2.9.0"></script>
   <!-- Game modules are lazy-loaded by app.js when a game is selected -->
-  <script src="js/app.js?v=2.8.1"></script>
+  <script src="js/app.js?v=2.9.0"></script>
 </body>
 </html>

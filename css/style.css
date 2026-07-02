@@ -105,7 +105,7 @@ input, textarea, select {
 @media (hover: hover) {
   .btn { transition: transform 0.08s ease, filter 0.12s ease; }
   .btn:hover { filter: brightness(1.12); }
-  .menu-icon-btn:hover, .close-btn:hover, .draw-main-btn:hover { filter: brightness(1.18); }
+  .menu-icon-btn:hover, .close-btn:hover, .dock-btn:hover { filter: brightness(1.18); }
   .online-user:hover { background: #262640; }
   .icon-opt:hover { border-color: #3c3c5c; }
 }
@@ -420,32 +420,90 @@ input, textarea, select {
   flex-shrink: 0;
 }
 
-.draw-dock {
+.board-dock {
   position: fixed;
   left: 16px;
   bottom: max(20px, env(safe-area-inset-bottom));
-  z-index: 30;
+  z-index: 40;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
+  padding: 5px;
+  border-radius: 999px;
+  background: rgba(28, 28, 46, 0.92);
+  border: 1px solid #2c2c44;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
 }
 
-.inventory-dock {
-  position: fixed;
-  left: 16px;
-  bottom: calc(max(20px, env(safe-area-inset-bottom)) + 116px);
-  z-index: 32;
+.dock-btn {
+  width: 46px;
+  height: 46px;
+  flex: 0 0 46px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 1.25rem;
+  cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  transition: background 0.14s ease, transform 0.08s ease;
 }
+.dock-btn.active {
+  background: var(--accent);
+  color: #06210f;
+}
+.dock-btn:active { transform: scale(0.92); }
+
+.tool-panel {
+  position: fixed;
+  left: 16px;
+  bottom: calc(max(20px, env(safe-area-inset-bottom)) + 64px);
+  z-index: 39;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 18px;
+  background: rgba(24, 24, 40, 0.96);
+  border: 1px solid #2c2c44;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(10px);
+  width: min(430px, calc(100vw - 32px));
+  max-height: calc(100vh - var(--nav-h, 58px) - 140px);
+  overflow-y: auto;
+  animation: panel-in 0.2s cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+
+.tool-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-group-label {
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-top: 4px;
+}
+.tool-group-label:first-child { margin-top: 0; }
 
 .inventory-panel {
   position: fixed;
-  left: 78px;
-  bottom: calc(max(20px, env(safe-area-inset-bottom)) + 86px);
+  left: 16px;
+  bottom: calc(max(20px, env(safe-area-inset-bottom)) + 64px);
   z-index: 44;
-  width: min(340px, calc(100vw - 96px));
+  width: min(340px, calc(100vw - 32px));
   max-height: min(58vh, 460px);
   border: 1px solid #2c2c44;
   border-radius: 20px;
@@ -455,6 +513,7 @@ input, textarea, select {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  animation: panel-in 0.2s cubic-bezier(0.34, 1.3, 0.64, 1);
 }
 
 .inventory-header {
@@ -514,57 +573,12 @@ input, textarea, select {
   box-shadow: 0 0 0 3px rgba(124,252,155,0.22), 0 18px 50px rgba(0,0,0,0.42);
 }
 
-@media (max-width: 520px) {
-  .inventory-panel {
-    left: 12px;
-    bottom: calc(max(20px, env(safe-area-inset-bottom)) + 172px);
-    width: calc(100vw - 24px);
-  }
-}
-
-.draw-main-btn {
-  width: 48px;
-  height: 48px;
-  flex: 0 0 48px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(28, 28, 46, 0.9);
-  color: var(--text);
-  font-size: 1.3rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  backdrop-filter: blur(6px);
-}
-
-.draw-main-btn.active {
-  background: var(--accent);
-  color: #06210f;
-}
-
-.draw-main-btn:active { transform: scale(0.92); }
-
-.draw-toolbar {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 6px;
-  border-radius: 24px;
-  background: rgba(28, 28, 46, 0.9);
-  backdrop-filter: blur(6px);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
-  max-width: calc(100vw - 80px);
-}
-
 .draw-tool-btn {
   width: 36px;
   height: 36px;
   border-radius: 50%;
   border: none;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.08);
   color: var(--text);
   font-size: 1.05rem;
   cursor: pointer;
@@ -609,30 +623,6 @@ input, textarea, select {
   cursor: pointer;
 }
 
-.dnd-dock {
-  position: fixed;
-  left: 16px;
-  bottom: calc(max(20px, env(safe-area-inset-bottom)) + 58px);
-  z-index: 31;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.dnd-toolbar {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 6px;
-  border-radius: 24px;
-  background: rgba(28, 28, 46, 0.92);
-  backdrop-filter: blur(6px);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
-  max-width: calc(100vw - 80px);
-}
-
 .dnd-tool-btn,
 .dnd-select {
   height: 36px;
@@ -671,7 +661,7 @@ input, textarea, select {
   right: 16px;
   bottom: max(20px, env(safe-area-inset-bottom));
   z-index: 45;
-  width: min(340px, calc(100vw - 32px));
+  width: min(360px, calc(100vw - 32px));
   padding: 14px;
   border: 1px solid #2c2c44;
   border-radius: 18px;
@@ -679,8 +669,9 @@ input, textarea, select {
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.42);
   backdrop-filter: blur(8px);
   text-align: left;
-  max-height: min(78vh, 620px);
+  max-height: min(72vh, 560px);
   overflow-y: auto;
+  animation: panel-in 0.2s cubic-bezier(0.34, 1.3, 0.64, 1);
 }
 
 .dnd-stats-header {
@@ -688,7 +679,7 @@ input, textarea, select {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .dnd-stats-name {
@@ -696,18 +687,57 @@ input, textarea, select {
   font-weight: 800;
 }
 
-.dnd-stats-type,
-.dnd-stats-details {
+.dnd-stats-type {
   color: var(--muted);
   font-size: 0.78rem;
 }
+
+.dnd-stats-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.dnd-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+.dnd-chip span { color: var(--muted); font-weight: 700; margin-right: 4px; }
 
 .dnd-stats-bars {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
+
+.dnd-stats-quick {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.dnd-quick-btn {
+  min-width: 44px;
+  height: 32px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 10px;
+  background: rgba(255, 93, 93, 0.16);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 900;
+  cursor: pointer;
+}
+.dnd-quick-btn.heal { background: rgba(124, 252, 155, 0.16); }
+.dnd-quick-btn:active { transform: scale(0.94); }
 
 .dnd-stat-bar-row {
   display: grid;
@@ -733,43 +763,43 @@ input, textarea, select {
 
 .dnd-stats-abilities {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  margin-bottom: 12px;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+  margin-bottom: 10px;
 }
 
 .dnd-ability {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 8px 6px;
-  border-radius: 12px;
+  padding: 6px 2px;
+  border-radius: 10px;
   background: rgba(255, 255, 255, 0.08);
 }
 
 .dnd-ability span {
   color: var(--muted);
-  font-size: 0.64rem;
+  font-size: 0.56rem;
   font-weight: 900;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
 }
 
 .dnd-ability strong {
-  font-size: 1rem;
+  font-size: 0.92rem;
 }
 
 .dnd-ability em {
   color: var(--accent2);
-  font-size: 0.74rem;
+  font-size: 0.68rem;
   font-style: normal;
   font-weight: 800;
 }
 
 .dnd-stats-editor {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
-  margin-bottom: 12px;
+  margin: 10px 0 12px;
 }
 
 .dnd-stat-edit-field {
