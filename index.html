@@ -8,7 +8,7 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/robot.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icons/robot.svg" />
-  <link rel="stylesheet" href="css/style.css?v=2.9.3" />
+  <link rel="stylesheet" href="css/style.css?v=2.9.4" />
 </head>
 <body>
   <nav id="top-navbar" class="top-navbar" aria-label="Main navigation">
@@ -81,6 +81,7 @@
         <button id="btn-draw" class="dock-btn" aria-label="Draw mode" type="button">✏️</button>
         <button id="btn-dnd" class="dock-btn" aria-label="Board tools" type="button">⚔️</button>
         <button id="btn-inventory" class="dock-btn" aria-label="Inventory" type="button">💰</button>
+        <button id="btn-dice" class="dock-btn" aria-label="Dice roller and history" type="button">🎲</button>
       </div>
       <div id="draw-toolbar" class="tool-panel hidden" aria-label="Drawing tools">
         <div class="tool-group">
@@ -144,6 +145,27 @@
         </div>
         <p class="inventory-hint">Drag board items here. Drag items back to the board.</p>
         <div id="inventory-list" class="inventory-list"></div>
+      </div>
+      <div id="dice-panel" class="dice-panel hidden" aria-label="Dice roller and history">
+        <div class="dice-header">
+          <span>🎲 Dice</span>
+          <button id="btn-dice-close" class="close-btn" aria-label="Close dice panel" type="button">✕</button>
+        </div>
+        <div class="dice-roll-row">
+          <span id="dice-roll-target" class="dice-roll-target"></span>
+          <select id="dice-panel-dice" class="dnd-select" aria-label="Dice to roll">
+            <option value="1d4">1d4</option>
+            <option value="1d6">1d6</option>
+            <option value="1d8">1d8</option>
+            <option value="1d10">1d10</option>
+            <option value="1d12">1d12</option>
+            <option value="1d20" selected>1d20</option>
+            <option value="2d20">2d20</option>
+            <option value="1d100">1d100</option>
+          </select>
+          <button id="btn-dice-panel-roll" class="dnd-tool-btn dnd-roll-btn" type="button" aria-label="Roll dice">Roll</button>
+        </div>
+        <div id="dice-history" class="dice-history"></div>
       </div>
       <div id="video-tray" class="video-tray" aria-live="polite"></div>
       <canvas id="stage"></canvas>
@@ -234,7 +256,7 @@
       <div class="field-group app-update-group">
           <label>App</label>
           <div class="version-row">
-        <span>Version <strong id="app-version">2.9.3</strong></span>
+        <span>Version <strong id="app-version">2.9.4</strong></span>
               <button id="btn-check-update" class="btn btn-small" type="button">Check for updates</button>
           </div>
           <p id="update-status" class="status"></p>
@@ -327,8 +349,8 @@
   <!-- QR code rendering for the join link -->
   <script src="https://cdn.jsdelivr.net/gh/davidshimjs/qrcodejs/qrcode.min.js"></script>
 
-  <script src="js/peer-net.js?v=2.9.3"></script>
+  <script src="js/peer-net.js?v=2.9.4"></script>
   <!-- Game modules are lazy-loaded by app.js when a game is selected -->
-  <script src="js/app.js?v=2.9.3"></script>
+  <script src="js/app.js?v=2.9.4"></script>
 </body>
 </html>

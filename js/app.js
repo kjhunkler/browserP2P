@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.9.3";
+const APP_VERSION = "2.9.4";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
@@ -1084,6 +1084,9 @@ const DND_PIN_KEY = "bp2p-dnd-pin";
 let dndPinned = loadDndPin(); // { id, kind, icon, x, y } floating pinned-details button
 let dndPinDrag = null; // dragging the floating pin button
 let dndStatsHeaderDrag = null; // dragging the stats card header to pin it
+const DICE_HISTORY_KEY = "bp2p-dice-history";
+const DICE_HISTORY_LIMIT = 60;
+let diceHistory = loadDiceHistory(); // persisted log of dice rolls
 
 function abilityMod(score) {
   return Math.floor(((Number(score) || 10) - 10) / 2);
@@ -1552,6 +1555,7 @@ function setInventoryOpen(open, closeOthers = true) {
     dndOpen = false;
     setMeasureMode(false);
   }
+  if (open) $("#dice-panel")?.classList.add("hidden");
   $("#inventory-panel")?.classList.toggle("hidden", !open);
   if (open || closeOthers) syncBoardDock();
   renderInventory();
@@ -1876,9 +1880,11 @@ function syncBoardDock() {
   $("#btn-draw")?.classList.toggle("active", drawMode);
   $("#btn-dnd")?.classList.toggle("active", dndOpen);
   $("#btn-inventory")?.classList.toggle("active", isInventoryOpen());
+  $("#btn-dice")?.classList.toggle("active", isDicePanelOpen());
   $("#draw-toolbar")?.classList.toggle("hidden", !inFreePlay || !drawMode);
   $("#dnd-toolbar")?.classList.toggle("hidden", !inFreePlay || !dndOpen);
   if (!inFreePlay) $("#inventory-panel")?.classList.add("hidden");
+  if (!inFreePlay) $("#dice-panel")?.classList.add("hidden");
   $("#btn-dnd-measure")?.classList.toggle("active", measureMode);
   syncDndPinButton();
   syncDrawToolUi();
@@ -1892,6 +1898,7 @@ function setMeasureMode(enabled) {
 
 function syncDndUi() {
   syncBoardDock();
+  if (isDicePanelOpen()) renderDicePanel();
   $("#btn-dnd-grid")?.classList.toggle("active", !!dndSharedState.grid);
   const hasAsset = !!dndSelectedId;
   const hasEntity = hasAsset || !!dndSelectedPlayerId;
@@ -1993,6 +2000,7 @@ function handleDndKeyboard(e) {
     e.preventDefault();
     if (measureMode) { setMeasureMode(false); return; }
     hideDndStats();
+    setDicePanelOpen(false);
     setDndOpen(false);
   } else if (key === "?") {
     e.preventDefault();
@@ -2035,8 +2043,126 @@ function requestDiceRoll() {
   else net.send({ t: "dnd-roll", formula });
 }
 
+const DICE_ROLL_MS = 1400;
+const DICE_LINGER_MS = 5000;
+const DICE_STACK_WINDOW_MS = 1600;
+
 function showDiceRoll(roll) {
-  activeDiceRoll = { ...roll, start: performance.now(), duration: 1400 };
+  addDiceHistory(roll);
+  const now = performance.now();
+  const active = activeDiceRoll;
+  const sides = parseDice(roll.formula).sides;
+  const canStack = active &&
+    active.fromId === roll.fromId &&
+    (active.label || "") === (roll.label || "") &&
+    parseDice(active.formula).sides === sides &&
+    now - active.start < active.duration + DICE_STACK_WINDOW_MS;
+  if (canStack) {
+    const rolls = [...active.rolls, ...roll.rolls];
+    const mod = (active.mod || 0) + (roll.mod || 0);
+    activeDiceRoll = {
+      ...active,
+      rolls,
+      mod,
+      formula: `${rolls.length}d${sides}`,
+      total: rolls.reduce((sum, v) => sum + v, 0) + mod,
+      start: now,
+      duration: DICE_ROLL_MS,
+    };
+    return;
+  }
+  activeDiceRoll = { ...roll, start: now, duration: DICE_ROLL_MS };
+}
+
+function loadDiceHistory() {
+  try { return JSON.parse(localStorage.getItem(DICE_HISTORY_KEY) || "[]"); } catch { return []; }
+}
+
+function saveDiceHistory() {
+  try { localStorage.setItem(DICE_HISTORY_KEY, JSON.stringify(diceHistory.slice(-DICE_HISTORY_LIMIT))); } catch {}
+}
+
+function addDiceHistory(roll) {
+  if (!roll) return;
+  if (roll.id && diceHistory.some((r) => r.id === roll.id)) return;
+  diceHistory.push({
+    id: roll.id,
+    fromId: roll.fromId,
+    name: profiles.get(roll.fromId)?.name || "Someone",
+    formula: roll.formula,
+    rolls: roll.rolls || [],
+    mod: roll.mod || 0,
+    label: roll.label || "",
+    total: roll.total,
+    ts: roll.ts || Date.now(),
+  });
+  if (diceHistory.length > DICE_HISTORY_LIMIT) diceHistory.splice(0, diceHistory.length - DICE_HISTORY_LIMIT);
+  saveDiceHistory();
+  if (isDicePanelOpen()) renderDicePanel();
+}
+
+function selectedRollEntity() {
+  if (dndSelectedPlayerId) {
+    const list = net.isHost ? [...players.values()] : lastState;
+    const p = list.find((x) => x?.id === dndSelectedPlayerId);
+    if (p) return { ...p, kind: "player", stats: dndStatsForPlayer(p) };
+  }
+  if (dndSelectedId) {
+    const asset = dndSharedState.assets.find((a) => a.id === dndSelectedId);
+    if (asset) return { ...asset, kind: asset.role || "asset" };
+  }
+  return null;
+}
+
+function requestDiceRollFromPanel() {
+  const formula = $("#dice-panel-dice")?.value || "1d20";
+  const entity = selectedRollEntity();
+  const label = entity ? `for ${entity.name || "entity"}` : "";
+  if (net.isHost) rollDiceForPlayer(MY_ID, formula, { label });
+  else net.send({ t: "dnd-roll", formula, label });
+}
+
+function isDicePanelOpen() {
+  return !$("#dice-panel")?.classList.contains("hidden");
+}
+
+function setDicePanelOpen(open) {
+  const show = !!open && selectedGame === "free-play";
+  if (show) setInventoryOpen(false, false);
+  $("#dice-panel")?.classList.toggle("hidden", !show);
+  if (show) renderDicePanel();
+  syncBoardDock();
+}
+
+function renderDicePanel() {
+  const target = $("#dice-roll-target");
+  if (target) {
+    const entity = selectedRollEntity();
+    target.textContent = entity ? `Rolling for ${entity.name || "entity"}` : `Rolling as ${profile.name || "you"}`;
+  }
+  const list = $("#dice-history");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!diceHistory.length) {
+    const empty = document.createElement("div");
+    empty.className = "dice-history-empty";
+    empty.textContent = "No rolls yet \u2014 make the first!";
+    list.appendChild(empty);
+    return;
+  }
+  for (const entry of [...diceHistory].reverse()) {
+    const row = document.createElement("div");
+    row.className = "dice-history-row";
+    const modPart = entry.mod ? (entry.mod > 0 ? `+${entry.mod}` : String(entry.mod)) : "";
+    const time = new Date(entry.ts || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const breakdown = (entry.rolls || []).join(" + ") + (modPart ? ` ${modPart}` : "");
+    const desc = entry.label ? `${entry.label} \u00b7 ${entry.formula}${modPart}` : `${entry.formula}${modPart}`;
+    row.innerHTML = `
+      <span class="dice-history-who">${esc(entry.name || "Someone")}</span>
+      <span class="dice-history-desc">${esc(desc)} <em>${esc(breakdown)} \u00b7 ${esc(time)}</em></span>
+      <span class="dice-history-total">${esc(String(entry.total))}</span>`;
+    list.appendChild(row);
+  }
 }
 
 // ============================================================ CANVAS ========
@@ -2267,7 +2393,7 @@ function drawDndAsset(asset, m) {
 function renderDiceOverlay(rect) {
   if (!activeDiceRoll) return;
   const elapsed = performance.now() - activeDiceRoll.start;
-  if (elapsed > activeDiceRoll.duration + 900) {
+  if (elapsed > activeDiceRoll.duration + DICE_LINGER_MS) {
     activeDiceRoll = null;
     return;
   }
@@ -2279,9 +2405,13 @@ function renderDiceOverlay(rect) {
     : activeDiceRoll.rolls;
   ctx.save();
   ctx.translate(rect.width / 2, Math.max(120, rect.height * 0.22));
-  ctx.font = "800 19px system-ui, sans-serif";
   const heading = `${pf.name} rolls ${activeDiceRoll.label || activeDiceRoll.formula}`;
-  const boxW = Math.max(300, Math.min(rect.width - 24, ctx.measureText(heading).width + 48));
+  const valueText = rolling ? shown.join(" + ") : String(activeDiceRoll.total);
+  ctx.font = "800 19px system-ui, sans-serif";
+  let contentW = ctx.measureText(heading).width;
+  ctx.font = rolling ? "900 34px system-ui, sans-serif" : "900 42px system-ui, sans-serif";
+  contentW = Math.max(contentW, ctx.measureText(valueText).width);
+  const boxW = Math.max(300, Math.min(rect.width - 24, contentW + 48));
   ctx.fillStyle = "rgba(0,0,0,0.72)";
   roundRect(ctx, -boxW / 2, -58, boxW, 116, 24);
   ctx.fill();
@@ -2294,7 +2424,7 @@ function renderDiceOverlay(rect) {
   ctx.font = "800 19px system-ui, sans-serif";
   ctx.fillText(heading, 0, -26);
   ctx.font = rolling ? "900 34px system-ui, sans-serif" : "900 42px system-ui, sans-serif";
-  ctx.fillText(rolling ? shown.join(" + ") : String(activeDiceRoll.total), 0, 18);
+  ctx.fillText(valueText, 0, 18);
   ctx.restore();
 }
 
@@ -4078,6 +4208,9 @@ $("#btn-draw-clear")?.addEventListener("click", clearDrawingWithConfirmation);
 $("#btn-dnd")?.addEventListener("click", () => setDndOpen(!dndOpen));
 $("#btn-inventory")?.addEventListener("click", () => setInventoryOpen(!isInventoryOpen()));
 $("#btn-inventory-close")?.addEventListener("click", () => setInventoryOpen(false));
+$("#btn-dice")?.addEventListener("click", () => setDicePanelOpen(!isDicePanelOpen()));
+$("#btn-dice-close")?.addEventListener("click", () => setDicePanelOpen(false));
+$("#btn-dice-panel-roll")?.addEventListener("click", requestDiceRollFromPanel);
 $("#btn-dnd-grid")?.addEventListener("click", () => sendDndAction({ type: "grid", grid: !dndSharedState.grid }));
 $("#btn-dnd-measure")?.addEventListener("click", () => setMeasureMode(!measureMode));
 $("#dnd-scene")?.addEventListener("change", (e) => setDndScene(e.target.value));
