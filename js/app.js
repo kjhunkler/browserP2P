@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.9.2";
+const APP_VERSION = "2.9.3";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
@@ -697,7 +697,7 @@ function handleHostMsg(peerId, msg) {
 
   } else if (msg.t === "dnd-roll") {
     const id = peerMap.get(peerId);
-    if (id) rollDiceForPlayer(id, msg.formula);
+    if (id) rollDiceForPlayer(id, msg.formula, { mod: msg.mod, label: msg.label });
 
   } else if (msg.t === "dnd-ping") {
     if (msg.ping) {
@@ -1078,6 +1078,12 @@ let activePings = []; // { x, y, color, name, start } in board cells
 let lastTapInfo = null; // for double-tap ping detection
 let activeDiceRoll = null;
 let dndPointerDown = null;
+let dndQuickMode = "hp"; // stats-card quick buttons adjust "hp" or "mana"
+let dndStatsEntity = null; // entity currently shown in the stats card
+const DND_PIN_KEY = "bp2p-dnd-pin";
+let dndPinned = loadDndPin(); // { id, kind, icon, x, y } floating pinned-details button
+let dndPinDrag = null; // dragging the floating pin button
+let dndStatsHeaderDrag = null; // dragging the stats card header to pin it
 
 function abilityMod(score) {
   return Math.floor(((Number(score) || 10) - 10) / 2);
@@ -1181,10 +1187,15 @@ function drawBar(x, y, w, h, pct, color) {
   ctx.fill();
 }
 
+function isPlayerEntity(entity) {
+  return entity?.kind === "player" && !entity.role;
+}
+
 function showDndStats(entity) {
   const card = $("#dnd-stats-card");
   if (!card || !entity) return;
   const stats = entity.stats || dndStatsForPlayer(entity);
+  dndStatsEntity = { ...entity, stats };
   card.dataset.kind = entity.kind || entity.role || "entity";
   card.dataset.id = entity.id || "";
   $("#dnd-stats-name").textContent = entity.name || "Unknown";
@@ -1193,36 +1204,59 @@ function showDndStats(entity) {
     <span class="dnd-chip"><span>LVL</span>${stats.level || 1}</span>
     <span class="dnd-chip"><span>AC</span>${stats.ac || 10}</span>
     <span class="dnd-chip"><span>SPD</span>${stats.speed || 30} ft</span>`;
+  if (dndQuickMode === "mana" && !(stats.maxMana > 0)) dndQuickMode = "hp";
   $("#dnd-stats-bars").innerHTML = `
-    <div class="dnd-stat-bar-row"><span>HP</span><div class="dnd-stat-bar"><i style="width:${Math.round(statPercent(stats.hp, stats.maxHp) * 100)}%;background:#ff5d5d"></i></div><b>${stats.hp}/${stats.maxHp}</b></div>
-    ${stats.maxMana > 0 ? `<div class="dnd-stat-bar-row"><span>Mana</span><div class="dnd-stat-bar"><i style="width:${Math.round(statPercent(stats.mana, stats.maxMana) * 100)}%;background:#4dd2ff"></i></div><b>${stats.mana}/${stats.maxMana}</b></div>` : ""}`;
-  buildQuickHpButtons(entity, stats);
+    <div class="dnd-stat-bar-row${dndQuickMode === "hp" ? " active" : ""}" data-bar="hp" role="button" title="Show HP +/- buttons"><span>HP</span><div class="dnd-stat-bar"><i style="width:${Math.round(statPercent(stats.hp, stats.maxHp) * 100)}%;background:#ff5d5d"></i></div><b>${stats.hp}/${stats.maxHp}</b></div>
+    ${stats.maxMana > 0 ? `<div class="dnd-stat-bar-row${dndQuickMode === "mana" ? " active" : ""}" data-bar="mana" role="button" title="Show mana +/- buttons"><span>Mana</span><div class="dnd-stat-bar"><i style="width:${Math.round(statPercent(stats.mana, stats.maxMana) * 100)}%;background:#4dd2ff"></i></div><b>${stats.mana}/${stats.maxMana}</b></div>` : ""}`;
+  for (const row of card.querySelectorAll(".dnd-stat-bar-row[data-bar]")) {
+    row.addEventListener("click", () => {
+      dndQuickMode = row.dataset.bar;
+      showDndStats(dndStatsEntity);
+    });
+  }
+  buildQuickStatButtons(entity, stats);
   $("#dnd-stats-abilities").innerHTML = DND_ABILITIES.map((key) => `
-    <div class="dnd-ability"><span>${key.toUpperCase()}</span><strong>${stats.abilities?.[key] ?? 10}</strong><em>${modText(stats.abilities?.[key] ?? 10)}</em></div>`).join("");
+    <button class="dnd-ability" type="button" data-ability="${key}" title="Roll ${key.toUpperCase()} check"><span>${key.toUpperCase()}</span><strong>${stats.abilities?.[key] ?? 10}</strong><em>${modText(stats.abilities?.[key] ?? 10)}</em></button>`).join("");
+  for (const btn of card.querySelectorAll(".dnd-ability[data-ability]")) {
+    btn.addEventListener("click", () => requestAbilityCheck(dndStatsEntity, btn.dataset.ability));
+  }
   $("#dnd-stats-editor")?.classList.add("hidden");
   buildDndStatsEditor(entity, stats);
+  $("#btn-dnd-stats-pin")?.classList.toggle("active", !!dndPinned && dndPinned.id === entity.id);
   card.classList.remove("hidden");
 }
 
-function applyHpDelta(entity, delta) {
-  const base = entity.kind === "player" ? dndStatsForPlayer(entity) : (entity.stats || statBlock(entity.statPreset));
+function applyStatDelta(entity, delta, field = "hp") {
+  const live = !isPlayerEntity(entity) ? dndSharedState.assets.find((a) => a.id === entity.id) : null;
+  const base = isPlayerEntity(entity) ? dndStatsForPlayer(entity) : (live?.stats || entity.stats || statBlock(entity.statPreset));
   const stats = { ...base, abilities: { ...(base.abilities || {}) } };
-  stats.hp = Math.max(0, Math.min(stats.maxHp || 1, (Number(stats.hp) || 0) + delta));
-  sendDndAction({ type: "stats", kind: entity.kind === "player" ? "player" : "asset", id: entity.id, stats });
+  if (field === "mana") stats.mana = Math.max(0, Math.min(stats.maxMana || 0, (Number(stats.mana) || 0) + delta));
+  else stats.hp = Math.max(0, Math.min(stats.maxHp || 1, (Number(stats.hp) || 0) + delta));
+  sendDndAction({ type: "stats", kind: isPlayerEntity(entity) ? "player" : "asset", id: entity.id, stats });
   showDndStats({ ...entity, stats });
 }
 
-function buildQuickHpButtons(entity, stats) {
+function requestAbilityCheck(entity, ability) {
+  if (!entity) return;
+  const stats = entity.stats || dndStatsForPlayer(entity);
+  const mod = abilityMod(stats.abilities?.[ability] ?? 10);
+  const label = `${entity.name || "Entity"} ${String(ability).toUpperCase()} check`;
+  if (net.isHost) rollDiceForPlayer(MY_ID, "1d20", { mod, label });
+  else net.send({ t: "dnd-roll", formula: "1d20", mod, label });
+}
+
+function buildQuickStatButtons(entity, stats) {
   const quick = $("#dnd-stats-quick");
   if (!quick) return;
   quick.innerHTML = "";
   if (!entity.id) return;
+  const mana = dndQuickMode === "mana";
   for (const delta of [-5, -1, 1, 5]) {
     const btn = document.createElement("button");
-    btn.className = "dnd-quick-btn" + (delta > 0 ? " heal" : "");
+    btn.className = "dnd-quick-btn" + (mana ? " mana" : delta > 0 ? " heal" : "");
     btn.type = "button";
-    btn.textContent = (delta > 0 ? "+" : "") + delta + " HP";
-    btn.addEventListener("click", () => applyHpDelta({ ...entity, stats }, delta));
+    btn.textContent = (delta > 0 ? "+" : "") + delta + (mana ? " MP" : " HP");
+    btn.addEventListener("click", () => applyStatDelta({ ...entity, stats }, delta, mana ? "mana" : "hp"));
     quick.appendChild(btn);
   }
 }
@@ -1265,7 +1299,7 @@ function buildDndStatsEditor(entity, stats) {
   save.textContent = "Save stats";
   save.addEventListener("click", () => saveDndStatsFromEditor(entity));
   actions.appendChild(save);
-  if (entity.kind !== "player") {
+  if (!isPlayerEntity(entity)) {
     const copy = document.createElement("button");
     copy.className = "btn btn-small";
     copy.type = "button";
@@ -1299,14 +1333,94 @@ function statsFromEditor(baseStats) {
 
 function saveDndStatsFromEditor(entity) {
   if (!entity?.id) return;
-  const base = entity.kind === "player" ? dndStatsForPlayer(entity) : (entity.stats || statBlock(entity.statPreset));
+  const base = isPlayerEntity(entity) ? dndStatsForPlayer(entity) : (entity.stats || statBlock(entity.statPreset));
   const stats = statsFromEditor(base);
-  sendDndAction({ type: "stats", kind: entity.kind === "player" ? "player" : "asset", id: entity.id, stats });
+  sendDndAction({ type: "stats", kind: isPlayerEntity(entity) ? "player" : "asset", id: entity.id, stats });
   showDndStats({ ...entity, stats });
 }
 
 function hideDndStats() {
   $("#dnd-stats-card")?.classList.add("hidden");
+}
+
+function loadDndPin() {
+  try {
+    const pin = JSON.parse(localStorage.getItem(DND_PIN_KEY) || "null");
+    return pin && typeof pin === "object" && pin.id ? pin : null;
+  } catch { return null; }
+}
+
+function saveDndPin() {
+  try {
+    if (dndPinned) localStorage.setItem(DND_PIN_KEY, JSON.stringify(dndPinned));
+    else localStorage.removeItem(DND_PIN_KEY);
+  } catch {}
+}
+
+function setDndPinPos(x, y) {
+  const btn = $("#dnd-stats-pin-btn");
+  if (!btn || !dndPinned) return;
+  const size = btn.offsetWidth || 52;
+  const px = Number.isFinite(Number(x)) ? Number(x) : 24;
+  const py = Number.isFinite(Number(y)) ? Number(y) : 96;
+  dndPinned.x = Math.max(4, Math.min((window.innerWidth || 360) - size - 4, px));
+  dndPinned.y = Math.max(4, Math.min((window.innerHeight || 640) - size - 4, py));
+  btn.style.left = `${dndPinned.x}px`;
+  btn.style.top = `${dndPinned.y}px`;
+}
+
+function syncDndPinButton() {
+  const btn = $("#dnd-stats-pin-btn");
+  if (!btn) return;
+  const show = !!dndPinned && selectedGame === "free-play";
+  btn.classList.toggle("hidden", !show);
+  if (show) {
+    btn.textContent = dndPinned.icon || "\ud83d\udccc";
+    setDndPinPos(dndPinned.x, dndPinned.y);
+  }
+}
+
+function pinDndStats(pos = null) {
+  if (!dndStatsEntity?.id) return;
+  const rect = $("#dnd-stats-card")?.getBoundingClientRect();
+  dndPinned = {
+    id: dndStatsEntity.id,
+    kind: isPlayerEntity(dndStatsEntity) ? "player" : "asset",
+    icon: dndStatsEntity.icon || "\ud83d\udccc",
+    x: pos?.x ?? rect?.left ?? 24,
+    y: pos?.y ?? rect?.top ?? 96,
+  };
+  hideDndStats();
+  syncDndPinButton();
+  saveDndPin();
+}
+
+function clearDndPin() {
+  dndPinned = null;
+  saveDndPin();
+  syncDndPinButton();
+  $("#btn-dnd-stats-pin")?.classList.remove("active");
+}
+
+function resolvePinnedEntity() {
+  if (!dndPinned) return null;
+  if (dndPinned.kind === "player") {
+    const list = net.isHost ? [...players.values()] : lastState;
+    const p = list.find((x) => x?.id === dndPinned.id);
+    return p ? { ...p, kind: "player", stats: dndStatsForPlayer(p) } : null;
+  }
+  const asset = dndSharedState.assets.find((a) => a.id === dndPinned.id);
+  return asset ? { ...asset, kind: asset.role || "asset" } : null;
+}
+
+function showPinnedDndStats() {
+  const entity = resolvePinnedEntity();
+  if (!entity) {
+    showToast("Pinned entity left the board", "info", "\ud83d\udccc");
+    clearDndPin();
+    return;
+  }
+  showDndStats(entity);
 }
 
 function playerAtCanvasPoint(pt, m) {
@@ -1766,6 +1880,7 @@ function syncBoardDock() {
   $("#dnd-toolbar")?.classList.toggle("hidden", !inFreePlay || !dndOpen);
   if (!inFreePlay) $("#inventory-panel")?.classList.add("hidden");
   $("#btn-dnd-measure")?.classList.toggle("active", measureMode);
+  syncDndPinButton();
   syncDrawToolUi();
 }
 
@@ -1892,14 +2007,18 @@ function parseDice(formula) {
   return { count, sides, formula: `${count}d${sides}` };
 }
 
-function rollDiceForPlayer(playerId, formula) {
+function rollDiceForPlayer(playerId, formula, extra = {}) {
   const dice = parseDice(formula);
+  const mod = Math.trunc(Number(extra.mod) || 0);
+  const label = extra.label ? String(extra.label).slice(0, 48) : "";
   const rolls = Array.from({ length: dice.count }, () => 1 + Math.floor(Math.random() * dice.sides));
-  const total = rolls.reduce((sum, v) => sum + v, 0);
-  const roll = { id: `roll-${Date.now()}-${Math.random().toString(36).slice(2)}`, fromId: playerId, formula: dice.formula, rolls, total, ts: Date.now() };
+  const total = rolls.reduce((sum, v) => sum + v, 0) + mod;
+  const roll = { id: `roll-${Date.now()}-${Math.random().toString(36).slice(2)}`, fromId: playerId, formula: dice.formula, rolls, mod, label, total, ts: Date.now() };
   const pf = profiles.get(playerId) || { name: "Someone" };
-  const detail = rolls.length > 1 ? ` (${rolls.join(" + ")})` : "";
-  const text = `🎲 ${pf.name} rolled ${dice.formula}: ${total}${detail}`;
+  const modPart = mod ? (mod > 0 ? `+${mod}` : String(mod)) : "";
+  const desc = label ? `${label} (${dice.formula}${modPart})` : `${dice.formula}${modPart}`;
+  const detail = rolls.length > 1 || mod ? ` (${rolls.join(" + ")}${mod ? ` ${mod > 0 ? "+" : "−"} ${Math.abs(mod)}` : ""})` : "";
+  const text = `🎲 ${pf.name} rolled ${desc}: ${total}${detail}`;
   chatLog.push({ fromId: playerId, text, ts: roll.ts });
   saveChatLog();
   renderChat();
@@ -2160,8 +2279,11 @@ function renderDiceOverlay(rect) {
     : activeDiceRoll.rolls;
   ctx.save();
   ctx.translate(rect.width / 2, Math.max(120, rect.height * 0.22));
+  ctx.font = "800 19px system-ui, sans-serif";
+  const heading = `${pf.name} rolls ${activeDiceRoll.label || activeDiceRoll.formula}`;
+  const boxW = Math.max(300, Math.min(rect.width - 24, ctx.measureText(heading).width + 48));
   ctx.fillStyle = "rgba(0,0,0,0.72)";
-  roundRect(ctx, -150, -58, 300, 116, 24);
+  roundRect(ctx, -boxW / 2, -58, boxW, 116, 24);
   ctx.fill();
   ctx.strokeStyle = pf.color || "#4dd2ff";
   ctx.lineWidth = 3;
@@ -2170,7 +2292,7 @@ function renderDiceOverlay(rect) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.font = "800 19px system-ui, sans-serif";
-  ctx.fillText(`${pf.name} rolls ${activeDiceRoll.formula}`, 0, -26);
+  ctx.fillText(heading, 0, -26);
   ctx.font = rolling ? "900 34px system-ui, sans-serif" : "900 42px system-ui, sans-serif";
   ctx.fillText(rolling ? shown.join(" + ") : String(activeDiceRoll.total), 0, 18);
   ctx.restore();
@@ -3433,23 +3555,40 @@ function renderOnlineUsers(users = onlineUsers) {
 }
 
 function onlineUserButton(user, isMe) {
-  const btn = document.createElement("button");
-  btn.className = "online-user";
-  btn.type = "button";
-  btn.innerHTML = `
+  const row = document.createElement("div");
+  row.className = "online-user";
+  row.innerHTML = `
     <span class="online-user-avatar" style="background:${user.color || COLORS[0]}">${esc(user.icon || "●")}</span>
     <span class="online-user-main"><span class="online-user-name">${esc(isMe ? user.name + " (you)" : user.name)}</span><span class="online-user-status">${esc(user.status || "Online")}</span></span>`;
-  btn.addEventListener("click", () => {
-    if (isMe) return;
-    if (user.hosting && user.lobby) joinLobbyCode(user.lobby);
-    else if (net.isHost && currentLobby?.code) {
-      activity.sendInvite(user.id, { code: currentLobby.code, name: currentLobby.name });
-      setStatus(`Invited ${user.name}.`);
-      showToast(`Invite sent to ${user.name}`, "success", "📨");
-      $("#online-dropdown")?.removeAttribute("open");
+  if (!isMe) {
+    const actions = document.createElement("span");
+    actions.className = "online-user-actions";
+    if (user.hosting && user.lobby) {
+      const join = document.createElement("button");
+      join.className = "btn btn-small online-user-action";
+      join.type = "button";
+      join.textContent = "Join";
+      join.addEventListener("click", () => {
+        joinLobbyCode(user.lobby);
+        $("#online-dropdown")?.removeAttribute("open");
+      });
+      actions.appendChild(join);
+    } else if (net.isHost && currentLobby?.code && user.status !== "In this lobby") {
+      const invite = document.createElement("button");
+      invite.className = "btn btn-small online-user-action";
+      invite.type = "button";
+      invite.textContent = "Invite";
+      invite.addEventListener("click", () => {
+        activity.sendInvite(user.id, { code: currentLobby.code, name: currentLobby.name });
+        setStatus(`Invited ${user.name}.`);
+        showToast(`Invite sent to ${user.name}`, "success", "📨");
+        $("#online-dropdown")?.removeAttribute("open");
+      });
+      actions.appendChild(invite);
     }
-  });
-  return btn;
+    if (actions.children.length) row.appendChild(actions);
+  }
+  return row;
 }
 
 function startActivity() {
@@ -3955,6 +4094,55 @@ $("#btn-dnd-zoom-in")?.addEventListener("click", () => setDndZoom(dndZoom * 1.25
 $("#btn-dnd-fit")?.addEventListener("click", fitDndBoard);
 $("#btn-dnd-roll")?.addEventListener("click", requestDiceRoll);
 $("#btn-dnd-stats-close")?.addEventListener("click", hideDndStats);
+$("#btn-dnd-stats-pin")?.addEventListener("click", () => {
+  if (dndPinned && dndPinned.id === dndStatsEntity?.id) clearDndPin();
+  else pinDndStats();
+});
+const dndPinBtnEl = $("#dnd-stats-pin-btn");
+dndPinBtnEl?.addEventListener("pointerdown", (e) => {
+  if (!dndPinned) return;
+  e.preventDefault();
+  dndPinBtnEl.setPointerCapture?.(e.pointerId);
+  const rect = dndPinBtnEl.getBoundingClientRect();
+  dndPinDrag = { moved: false, startX: e.clientX, startY: e.clientY, dx: e.clientX - rect.left, dy: e.clientY - rect.top };
+});
+dndPinBtnEl?.addEventListener("pointermove", (e) => {
+  if (!dndPinDrag) return;
+  if (!dndPinDrag.moved && Math.hypot(e.clientX - dndPinDrag.startX, e.clientY - dndPinDrag.startY) < 6) return;
+  dndPinDrag.moved = true;
+  setDndPinPos(e.clientX - dndPinDrag.dx, e.clientY - dndPinDrag.dy);
+});
+dndPinBtnEl?.addEventListener("pointerup", () => {
+  if (!dndPinDrag) return;
+  const wasDrag = dndPinDrag.moved;
+  dndPinDrag = null;
+  if (wasDrag) saveDndPin();
+  else showPinnedDndStats();
+});
+dndPinBtnEl?.addEventListener("pointercancel", () => {
+  if (dndPinDrag?.moved) saveDndPin();
+  dndPinDrag = null;
+});
+// Dragging the details card by its header converts it into the floating pin button.
+const dndStatsHeaderEl = $("#dnd-stats-header");
+dndStatsHeaderEl?.addEventListener("pointerdown", (e) => {
+  if (e.target.closest("button") || !dndStatsEntity?.id) return;
+  e.preventDefault();
+  dndStatsHeaderDrag = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY };
+});
+window.addEventListener("pointermove", (e) => {
+  if (!dndStatsHeaderDrag || e.pointerId !== dndStatsHeaderDrag.pointerId) return;
+  if (Math.hypot(e.clientX - dndStatsHeaderDrag.startX, e.clientY - dndStatsHeaderDrag.startY) < 12) return;
+  dndStatsHeaderDrag = null;
+  pinDndStats({ x: e.clientX - 26, y: e.clientY - 26 });
+  dndPinDrag = { moved: true, startX: e.clientX, startY: e.clientY, dx: 26, dy: 26 };
+  dndPinBtnEl?.setPointerCapture?.(e.pointerId);
+});
+window.addEventListener("pointerup", (e) => {
+  if (dndStatsHeaderDrag?.pointerId === e.pointerId) dndStatsHeaderDrag = null;
+  if (dndPinDrag) { if (dndPinDrag.moved) saveDndPin(); dndPinDrag = null; }
+});
+window.addEventListener("resize", () => { if (dndPinned) syncDndPinButton(); });
 $("#btn-custom-asset-close")?.addEventListener("click", closeCustomAssetModal);
 $("#btn-custom-asset-save")?.addEventListener("click", () => saveCustomAssetFromModal(false));
 $("#btn-custom-asset-add")?.addEventListener("click", () => saveCustomAssetFromModal(true));

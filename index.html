@@ -8,7 +8,7 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/robot.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icons/robot.svg" />
-  <link rel="stylesheet" href="css/style.css?v=2.9.2" />
+  <link rel="stylesheet" href="css/style.css?v=2.9.3" />
 </head>
 <body>
   <nav id="top-navbar" class="top-navbar" aria-label="Main navigation">
@@ -148,12 +148,15 @@
       <div id="video-tray" class="video-tray" aria-live="polite"></div>
       <canvas id="stage"></canvas>
       <div id="dnd-stats-card" class="dnd-stats-card hidden" aria-live="polite">
-        <div class="dnd-stats-header">
+        <div id="dnd-stats-header" class="dnd-stats-header">
           <div>
             <div id="dnd-stats-name" class="dnd-stats-name"></div>
             <div id="dnd-stats-type" class="dnd-stats-type"></div>
           </div>
-          <button id="btn-dnd-stats-close" class="close-btn" aria-label="Close stats">✕</button>
+          <div class="dnd-stats-header-btns">
+            <button id="btn-dnd-stats-pin" class="close-btn" aria-label="Pin details as floating button" title="Pin details as floating button">📌</button>
+            <button id="btn-dnd-stats-close" class="close-btn" aria-label="Close stats">✕</button>
+          </div>
         </div>
         <div id="dnd-stats-chips" class="dnd-stats-chips"></div>
         <div id="dnd-stats-bars" class="dnd-stats-bars"></div>
@@ -162,6 +165,7 @@
         <div id="dnd-stats-editor" class="dnd-stats-editor hidden"></div>
         <div id="dnd-stats-actions" class="dnd-stats-actions"></div>
       </div>
+      <button id="dnd-stats-pin-btn" class="dnd-stats-pin-btn hidden" type="button" aria-label="Show pinned entity details">📌</button>
     </section>
 
   </div>
@@ -230,7 +234,7 @@
       <div class="field-group app-update-group">
           <label>App</label>
           <div class="version-row">
-        <span>Version <strong id="app-version">2.9.2</strong></span>
+        <span>Version <strong id="app-version">2.9.3</strong></span>
               <button id="btn-check-update" class="btn btn-small" type="button">Check for updates</button>
           </div>
           <p id="update-status" class="status"></p>
@@ -323,8 +327,8 @@
   <!-- QR code rendering for the join link -->
   <script src="https://cdn.jsdelivr.net/gh/davidshimjs/qrcodejs/qrcode.min.js"></script>
 
-  <script src="js/peer-net.js?v=2.9.2"></script>
+  <script src="js/peer-net.js?v=2.9.3"></script>
   <!-- Game modules are lazy-loaded by app.js when a game is selected -->
-  <script src="js/app.js?v=2.9.2"></script>
+  <script src="js/app.js?v=2.9.3"></script>
 </body>
 </html>
