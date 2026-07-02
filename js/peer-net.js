@@ -317,7 +317,7 @@ class PeerNet {
         this._emit("connected");
       });
       conn.on("data",  (data) => { if (!this._closed) { this._markHostSeen(); if (!this._handleInternal(data, conn)) this._emit("message", { from: "host", data }); } });
-      conn.on("close", ()     => { this._emitHostClosedOnce(); });
+      conn.on("close", ()     => { if (this.hostConn === conn) this._emitHostClosedOnce(); });
     });
 
     peer.on("error", (err) => {
@@ -377,7 +377,7 @@ class PeerNet {
         this._emit("connected");
       });
       conn.on("data", (data) => { if (!this._closed) { this._markHostSeen(); if (!this._handleInternal(data, conn)) this._emit("message", { from: "host", data }); } });
-      conn.on("close", () => { this._emitHostClosedOnce(); });
+      conn.on("close", () => { if (this.hostConn === conn) this._emitHostClosedOnce(); });
     });
 
     peer.on("error", (err) => { if (!this._closed) this._emit("error", err); });
@@ -444,12 +444,21 @@ class PeerNet {
   // leaves). Tears down the current connection and participates in a new
   // host election on the same channel, keeping all registered event handlers.
   migrate(channel, preferHost = false) {
+    this._migrateTo(PREFIX + "auto" + (channel ? "-" + channel : ""), preferHost);
+  }
+
+  // Same election flow, but for a fixed-code lobby: the winner re-registers
+  // the room code so remaining players stay in the same lobby.
+  migrateCode(code, preferHost = false) {
+    this._migrateTo(PREFIX + String(code).trim(), preferHost);
+  }
+
+  _migrateTo(fullId, preferHost) {
     this.destroy();
     this._closed = false;
     this.isHost = false;
-    this.code = null;
-    this._autoId = PREFIX + "auto" + (channel ? "-" + channel : "");
-    this.code = this._autoId.slice(PREFIX.length);
+    this._autoId = fullId;
+    this.code = fullId.slice(PREFIX.length);
     if (preferHost) this._becomeHost();
     else this._tryJoinThenHost();
   }

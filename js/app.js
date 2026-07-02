@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.9.0";
+const APP_VERSION = "2.9.1";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
@@ -337,6 +337,7 @@ let activity = new PeerActivity();
 let autoMode = false;
 let hasLeftLobby = true;
 let migratingFromHostId = null;
+let migrationPending = false;
 let keepPlayingAfterMigration = false;
 let yieldedHostForBackground = false;
 let pendingMigratedGameState = null;
@@ -462,6 +463,7 @@ function getStoredLobby() {
 function wireNetEvents() {
   net.on("ready", async () => {
     yieldedHostForBackground = false;
+    migrationPending = false;
     saveCurrentLobby(net.code, "host");
     players.clear();
     peerMap.clear();
@@ -509,6 +511,7 @@ function wireNetEvents() {
 
   net.on("connected", () => {
     yieldedHostForBackground = false;
+    migrationPending = false;
     saveCurrentLobby(net.code, "client");
     net.send({ t: "hello", id: MY_ID, name: profile.name, icon: profile.icon, preferredColor: profile.color });
     announceCameraOn();
@@ -527,6 +530,7 @@ function wireNetEvents() {
 
   net.on("error", (err) => {
     console.error(err);
+    migrationPending = false;
     setStatus("Connection error: " + (err.type === "unavailable-id" ? "That lobby is already hosted." : (err.type || err.message || err)));
     if (err.type === "unavailable-id" && currentLobby?.role === "host") {
       clearCurrentLobby();
@@ -557,28 +561,9 @@ function wireNetEvents() {
 wireNetEvents();
 
 function migrateFromHost(snapshotReason) {
-  if (hasLeftLobby) return;
-  if (!autoMode) {
-    showToast("The host left — returning to the menu…", "error", "🔌");
-    setTimeout(() => location.reload(), 1600);
-    return;
-  }
-  keepPlayingAfterMigration = screens.play.classList.contains("active");
-  migratingFromHostId = lastHostOrder[0] || null;
-  pendingMigratedGameState = snapshotActiveGame(snapshotReason) || loadSavedGameState(selectedGame)?.state || null;
-  const remainingOrder = migratingFromHostId ? lastHostOrder.filter((id) => id !== migratingFromHostId) : [MY_ID];
-  const myIndex = remainingOrder.indexOf(MY_ID);
-  const preferHost = myIndex === 0;
-  const delay = myIndex < 0 ? 300 : myIndex * 700;
-  stopHostLoop();
-  setTimeout(() => {
-    if (!hasLeftLobby) net.migrate(AUTO_CHANNEL, preferHost);
-  }, delay);
-}
-
-function handleHostClosed() {
-  if (hasLeftLobby) return;
-  if (!autoMode) {
+  if (hasLeftLobby || migrationPending) return;
+  const lobbyCode = !autoMode ? sanitizeLobbyCode(currentLobby?.code) : "";
+  if (!autoMode && lobbyCode.length !== 4) {
     setStatus("The host left this lobby.");
     showToast("The host left this lobby", "error", "🔌");
     clearCurrentLobby();
@@ -588,6 +573,25 @@ function handleHostClosed() {
     refreshLobbyCards();
     return;
   }
+  migrationPending = true;
+  keepPlayingAfterMigration = screens.play.classList.contains("active");
+  migratingFromHostId = lastHostOrder[0] || null;
+  pendingMigratedGameState = snapshotActiveGame(snapshotReason) || loadSavedGameState(selectedGame)?.state || null;
+  const remainingOrder = migratingFromHostId ? lastHostOrder.filter((id) => id !== migratingFromHostId) : [MY_ID];
+  const myIndex = remainingOrder.indexOf(MY_ID);
+  const preferHost = myIndex === 0;
+  const delay = myIndex < 0 ? 300 : myIndex * 700;
+  showToast(preferHost ? "Host left — taking over as host…" : "Host left — reconnecting…", "info", "👑");
+  stopHostLoop();
+  setTimeout(() => {
+    if (hasLeftLobby) return;
+    if (lobbyCode) net.migrateCode(lobbyCode, preferHost);
+    else net.migrate(AUTO_CHANNEL, preferHost);
+  }, delay);
+}
+
+function handleHostClosed() {
+  if (hasLeftLobby) return;
   migrateFromHost("host migration snapshot");
 }
 
@@ -3089,9 +3093,13 @@ function closeProfileSheet() {
 function leaveLobby() {
   if (!net.isHost) {
     try { net.send({ t: "leave" }); } catch {}
+  } else if (net.peerCount() > 0) {
+    // Graceful handoff: tell remaining players to elect a new host right away.
+    try { net.yieldHost("host left"); } catch {}
   }
   hasLeftLobby = true;
   autoMode = false;
+  migrationPending = false;
   keepPlayingAfterMigration = false;
   yieldedHostForBackground = false;
   playStarted = false;
@@ -3139,6 +3147,7 @@ function resetNetworkForLobby() {
   lastState = [];
   lastHostOrder = [];
   playStarted = false;
+  migrationPending = false;
   setRestorePlay(false);
 }
 
