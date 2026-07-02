@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.6.3";
+const APP_VERSION = "2.7.5";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
@@ -353,6 +353,22 @@ const $ = (sel) => document.querySelector(sel);
 const screens = { menu: $("#screen-menu"), lobby: $("#screen-lobby"), play: $("#screen-play") };
 function show(name) {
   for (const key in screens) screens[key].classList.toggle("active", key === name);
+  syncTopNav();
+}
+
+function isInLobby() {
+  return !!(currentLobby?.code && (net?.peer || net?.hostConn || net?.isHost));
+}
+
+function syncTopNav() {
+  const chatBtn = $("#btn-chat");
+  if (chatBtn) chatBtn.classList.toggle("hidden", !isInLobby());
+  $("#btn-leave-lobby")?.classList.toggle("hidden", !isInLobby());
+  const avatar = $("#nav-avatar");
+  if (avatar) {
+    avatar.textContent = profile.icon || "⚙️";
+    avatar.parentElement.style.background = myColor || profile.color || "";
+  }
 }
 
 // ============================================================ HOST STATE ====
@@ -411,12 +427,14 @@ function preferredLobbyCode() {
 function saveCurrentLobby(code, role) {
   currentLobby = { code, role, name: lobbyDisplayName(code) };
   localStorage.setItem(CURRENT_LOBBY_KEY, JSON.stringify(currentLobby));
+  syncTopNav();
   updateActivityStatus();
 }
 
 function clearCurrentLobby() {
   currentLobby = null;
   localStorage.removeItem(CURRENT_LOBBY_KEY);
+  syncTopNav();
   updateActivityStatus();
 }
 
@@ -932,6 +950,7 @@ const drawingRedoStack = [];
 // ============================================================ DND BOARD ======
 const DND_STATE_KEY = "bp2p-dnd-board";
 const DND_LIBRARY_KEY = "bp2p-dnd-assets";
+const DND_INVENTORY_KEY = "bp2p-dnd-inventory";
 const DND_GRID_FT = 5;
 const DND_CELL_PX = 48;
 const DND_ZOOM_KEY = "bp2p-dnd-zoom";
@@ -950,6 +969,8 @@ const DND_ASSETS = [
   { id: "tree", name: "Tree", icon: "🌲", color: "#22aa66", w: 1, h: 1, role: "object" },
   { id: "rock", name: "Rock", icon: "🪨", color: "#9090a8", w: 1, h: 1, role: "object" },
 ];
+const CUSTOM_ASSET_ICONS = ["⭐", "⚔️", "🛡️", "🧙", "🧟", "👺", "🐉", "💀", "🧰", "🧱", "🌲", "🪨", "🔥", "💧", "⚡", "❄️", "🏰", "🚪", "🪤", "💎", "📜", "🕯️", "🗝️", "🍄"];
+const CUSTOM_ASSET_COLORS = ["#4dd2ff", "#7cfc9b", "#ff5d5d", "#ffbb33", "#aa44ff", "#c8c8d8", "#22cc88", "#ff8844", "#9090a8", "#ffffff"];
 const DND_SCENES = [
   { id: "blank", name: "Blank Board", bg: "#182033", board: { cols: 24, rows: 18 }, assets: [] },
   { id: "tavern", name: "Tavern Ambush", bg: "#3a2418", board: { cols: 24, rows: 18 }, assets: [
@@ -967,7 +988,7 @@ const DND_SCENES = [
 ];
 
 function defaultDndState() {
-  return { grid: false, board: { cols: 24, rows: 18 }, bg: "#182033", assets: [], playerStats: {} };
+  return { grid: false, board: { cols: 24, rows: 18 }, bg: "#182033", assets: [], playerStats: {}, playerSizes: {} };
 }
 
 function loadDndState() {
@@ -987,11 +1008,23 @@ function saveDndLibrary() {
   try { localStorage.setItem(DND_LIBRARY_KEY, JSON.stringify(dndLocalLibrary)); } catch {}
 }
 
+function loadDndInventory() {
+  try { return JSON.parse(localStorage.getItem(DND_INVENTORY_KEY) || "[]"); } catch { return []; }
+}
+
+function saveDndInventory() {
+  try { localStorage.setItem(DND_INVENTORY_KEY, JSON.stringify(dndInventory)); } catch {}
+}
+
 let dndSharedState = loadDndState();
 let dndLocalLibrary = loadDndLibrary();
+let dndInventory = loadDndInventory();
 let dndOpen = false;
 let dndSelectedId = null;
+let dndSelectedPlayerId = null;
+const dndSelectedIds = new Set();
 let dndDrag = null;
+let dndInventoryDrag = null;
 let dndPlayerDrag = null;
 let dndHoverName = "";
 let dndZoom = Math.max(0.25, Math.min(2.25, Number(localStorage.getItem(DND_ZOOM_KEY) || 1)));
@@ -1052,11 +1085,18 @@ function dndStatsForPlayer(player) {
 function ensureDndPlayerStats() {
   const list = net.isHost ? [...players.values()] : lastState;
   if (!dndSharedState.playerStats) dndSharedState.playerStats = {};
+  if (!dndSharedState.playerSizes) dndSharedState.playerSizes = {};
   let changed = false;
   for (const p of list) {
-    if (!p?.id || dndSharedState.playerStats[p.id]) continue;
-    dndSharedState.playerStats[p.id] = dndStatsForPlayer(p);
-    changed = true;
+    if (!p?.id) continue;
+    if (!dndSharedState.playerStats[p.id]) {
+      dndSharedState.playerStats[p.id] = dndStatsForPlayer(p);
+      changed = true;
+    }
+    if (!dndSharedState.playerSizes[p.id]) {
+      dndSharedState.playerSizes[p.id] = 1;
+      changed = true;
+    }
   }
   if (changed) saveDndState();
 }
@@ -1097,6 +1137,8 @@ function showDndStats(entity) {
   const card = $("#dnd-stats-card");
   if (!card || !entity) return;
   const stats = entity.stats || dndStatsForPlayer(entity);
+  card.dataset.kind = entity.kind || entity.role || "entity";
+  card.dataset.id = entity.id || "";
   $("#dnd-stats-name").textContent = entity.name || "Unknown";
   $("#dnd-stats-type").textContent = `${entity.kind || entity.role || "entity"} • Level ${stats.level || 1} • AC ${stats.ac || 10}`;
   $("#dnd-stats-bars").innerHTML = `
@@ -1105,7 +1147,76 @@ function showDndStats(entity) {
   $("#dnd-stats-abilities").innerHTML = DND_ABILITIES.map((key) => `
     <div class="dnd-ability"><span>${key.toUpperCase()}</span><strong>${stats.abilities?.[key] ?? 10}</strong><em>${modText(stats.abilities?.[key] ?? 10)}</em></div>`).join("");
   $("#dnd-stats-details").textContent = `Speed ${stats.speed || 30} ft${entity.ownerId ? " • Owner token" : ""}`;
+  buildDndStatsEditor(entity, stats);
   card.classList.remove("hidden");
+}
+
+function buildDndStatsEditor(entity, stats) {
+  const editor = $("#dnd-stats-editor");
+  const actions = $("#dnd-stats-actions");
+  if (!editor || !actions) return;
+  editor.innerHTML = "";
+  actions.innerHTML = "";
+  const fields = [
+    ["level", "Lvl"], ["ac", "AC"], ["speed", "Speed"],
+    ["hp", "HP"], ["maxHp", "Max HP"], ["mana", "Mana"], ["maxMana", "Max Mana"],
+    ...DND_ABILITIES.map((key) => ["ability:" + key, key.toUpperCase()]),
+  ];
+  for (const [key, label] of fields) {
+    const wrap = document.createElement("label");
+    wrap.className = "dnd-stat-edit-field";
+    wrap.textContent = label;
+    const input = document.createElement("input");
+    input.type = "number";
+    input.value = key.startsWith("ability:") ? (stats.abilities?.[key.split(":")[1]] ?? 10) : (stats[key] ?? 0);
+    input.dataset.stat = key;
+    wrap.appendChild(input);
+    editor.appendChild(wrap);
+  }
+  const save = document.createElement("button");
+  save.className = "btn btn-small btn-primary";
+  save.type = "button";
+  save.textContent = "Save stats";
+  save.addEventListener("click", () => saveDndStatsFromEditor(entity));
+  actions.appendChild(save);
+  if (entity.kind !== "player") {
+    const copy = document.createElement("button");
+    copy.className = "btn btn-small";
+    copy.type = "button";
+    copy.textContent = "Duplicate";
+    copy.addEventListener("click", () => duplicateSelectedDndAsset(entity.id));
+    actions.appendChild(copy);
+    const remove = document.createElement("button");
+    remove.className = "btn btn-small btn-danger";
+    remove.type = "button";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", () => removeSelectedDndAsset(entity.id));
+    actions.appendChild(remove);
+  }
+}
+
+function statsFromEditor(baseStats) {
+  const next = { ...baseStats, abilities: { ...(baseStats.abilities || {}) } };
+  for (const input of document.querySelectorAll("#dnd-stats-editor input[data-stat]")) {
+    const value = Number(input.value);
+    if (!Number.isFinite(value)) continue;
+    const key = input.dataset.stat;
+    if (key.startsWith("ability:")) next.abilities[key.split(":")[1]] = value;
+    else next[key] = value;
+  }
+  next.maxHp = Math.max(1, Number(next.maxHp) || 1);
+  next.hp = Math.max(0, Math.min(next.maxHp, Number(next.hp) || 0));
+  next.maxMana = Math.max(0, Number(next.maxMana) || 0);
+  next.mana = Math.max(0, Math.min(next.maxMana, Number(next.mana) || 0));
+  return next;
+}
+
+function saveDndStatsFromEditor(entity) {
+  if (!entity?.id) return;
+  const base = entity.kind === "player" ? dndStatsForPlayer(entity) : (entity.stats || statBlock(entity.statPreset));
+  const stats = statsFromEditor(base);
+  sendDndAction({ type: "stats", kind: entity.kind === "player" ? "player" : "asset", id: entity.id, stats });
+  showDndStats({ ...entity, stats });
 }
 
 function hideDndStats() {
@@ -1115,9 +1226,21 @@ function hideDndStats() {
 function playerAtPoint(norm) {
   for (let i = lastState.length - 1; i >= 0; i--) {
     const p = lastState[i];
-    if (Math.hypot(norm.x - p.x, norm.y - p.y) <= 0.035) return p;
+    if (p.connected === false) continue;
+    const radius = playerHitRadius(p);
+    if (Math.hypot(norm.x - p.x, norm.y - p.y) <= radius) return p;
   }
   return null;
+}
+
+function playerTokenSize(player) {
+  return dndSharedState.playerSizes?.[player.id] || 1;
+}
+
+function playerHitRadius(player) {
+  const rect = canvas.getBoundingClientRect();
+  const px = Math.max(24, DND_CELL_PX * dndZoom * playerTokenSize(player) * 0.5);
+  return Math.max(0.025, px / Math.max(rect.width || 1, rect.height || 1));
 }
 
 function dndAssetCatalog() {
@@ -1175,9 +1298,100 @@ function sendDndAction(action) {
   else net.send({ t: "dnd-action", action });
 }
 
+function cloneAsset(asset, overrides = {}) {
+  return { ...JSON.parse(JSON.stringify(asset)), ...overrides };
+}
+
+function selectedDndAssets() {
+  const ids = dndSelectedIds.size ? dndSelectedIds : new Set(dndSelectedId ? [dndSelectedId] : []);
+  return dndSharedState.assets.filter((a) => ids.has(a.id));
+}
+
+function selectDndAsset(id, additive = false) {
+  if (!additive) dndSelectedIds.clear();
+  if (id) {
+    if (additive && dndSelectedIds.has(id)) dndSelectedIds.delete(id);
+    else dndSelectedIds.add(id);
+  }
+  dndSelectedId = id || Array.from(dndSelectedIds).at(-1) || null;
+  dndSelectedPlayerId = null;
+  syncDndUi();
+}
+
+function isInventoryOpen() {
+  return !$("#inventory-panel")?.classList.contains("hidden");
+}
+
+function setInventoryOpen(open) {
+  $("#inventory-panel")?.classList.toggle("hidden", !open);
+  $("#btn-inventory")?.classList.toggle("active", open);
+  renderInventory();
+}
+
+function renderInventory() {
+  const list = $("#inventory-list");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!dndInventory.length) {
+    const empty = document.createElement("div");
+    empty.className = "inventory-empty";
+    empty.textContent = "Empty";
+    list.appendChild(empty);
+    return;
+  }
+  for (const item of dndInventory) {
+    const btn = document.createElement("button");
+    btn.className = "inventory-item";
+    btn.type = "button";
+    btn.draggable = true;
+    btn.innerHTML = `<span>${esc(item.icon || "●")}</span>${esc(item.name || "Item")}`;
+    btn.addEventListener("dragstart", (e) => {
+      dndInventoryDrag = item.id;
+      e.dataTransfer?.setData("text/plain", item.id);
+    });
+    btn.addEventListener("click", () => showDndStats({ ...item, kind: item.role || "object" }));
+    list.appendChild(btn);
+  }
+}
+
+function addAssetsToInventory(assets, removeFromBoard = true) {
+  if (!assets.length) return;
+  for (const asset of assets) dndInventory.push(cloneAsset(asset, { id: `inv-${Date.now()}-${Math.random().toString(36).slice(2)}`, x: 0, y: 0, local: true }));
+  saveDndInventory();
+  renderInventory();
+  if (removeFromBoard) for (const asset of assets) sendDndAction({ type: "remove", id: asset.id });
+}
+
+function addInventoryItemToBoard(itemId, boardPoint) {
+  const index = dndInventory.findIndex((item) => item.id === itemId);
+  if (index < 0) return;
+  const item = dndInventory[index];
+  const board = dndSharedState.board || defaultDndState().board;
+  const asset = cloneAsset(item, {
+    id: `${MY_ID}-${Date.now()}`,
+    x: Math.max(0, Math.min(board.cols - (item.w || 1), Math.round(boardPoint.x * 2) / 2)),
+    y: Math.max(0, Math.min(board.rows - (item.h || 1), Math.round(boardPoint.y * 2) / 2)),
+    local: false,
+  });
+  dndInventory.splice(index, 1);
+  saveDndInventory();
+  renderInventory();
+  sendDndAction({ type: "add", asset });
+}
+
+function pointerOverInventory(e) {
+  const panel = $("#inventory-panel");
+  if (!panel || panel.classList.contains("hidden") || !e) return false;
+  const src = e.changedTouches ? e.changedTouches[0] : e;
+  const rect = panel.getBoundingClientRect();
+  return src.clientX >= rect.left && src.clientX <= rect.right && src.clientY >= rect.top && src.clientY <= rect.bottom;
+}
+
 function replaceDndState(state) {
   dndSharedState = { ...defaultDndState(), ...(state || {}) };
   dndSelectedId = dndSharedState.assets.some((a) => a.id === dndSelectedId) ? dndSelectedId : null;
+  for (const id of Array.from(dndSelectedIds)) if (!dndSharedState.assets.some((a) => a.id === id)) dndSelectedIds.delete(id);
+  dndSelectedPlayerId = null;
   saveDndState();
   syncDndCanvasStyle();
   syncDndUi();
@@ -1189,15 +1403,43 @@ function applyDndAction(action, actorId = MY_ID, broadcast = true) {
     replaceDndState(action.state);
   } else if (action.type === "add") {
     dndSharedState.assets.push(ensureAssetStats({ ...action.asset, ownerId: actorId }));
-    dndSelectedId = action.asset.id;
+    selectDndAsset(action.asset.id, false);
+    dndSelectedPlayerId = null;
   } else if (action.type === "move") {
     const asset = dndSharedState.assets.find((a) => a.id === action.id);
     if (asset) { asset.x = action.x; asset.y = action.y; }
   } else if (action.type === "resize") {
     const asset = dndSharedState.assets.find((a) => a.id === action.id);
     if (asset) { asset.w = action.w; asset.h = action.h; }
+  } else if (action.type === "resize-player") {
+    if (!dndSharedState.playerSizes) dndSharedState.playerSizes = {};
+    dndSharedState.playerSizes[action.id] = action.size;
+  } else if (action.type === "remove") {
+    dndSharedState.assets = dndSharedState.assets.filter((a) => a.id !== action.id);
+    if (dndSelectedId === action.id) dndSelectedId = null;
+    dndSelectedIds.delete(action.id);
+  } else if (action.type === "duplicate") {
+    const asset = dndSharedState.assets.find((a) => a.id === action.id);
+    if (asset) {
+      const copy = ensureAssetStats(cloneAsset(asset, { id: `${actorId}-${Date.now()}-${Math.random().toString(36).slice(2)}`, name: `${asset.name || "Entity"} Copy`, x: asset.x + 0.5, y: asset.y + 0.5, ownerId: actorId }));
+      dndSharedState.assets.push(copy);
+      selectDndAsset(copy.id, false);
+      dndSelectedPlayerId = null;
+    }
+  } else if (action.type === "stats") {
+    if (action.kind === "player") {
+      if (!dndSharedState.playerStats) dndSharedState.playerStats = {};
+      dndSharedState.playerStats[action.id] = action.stats;
+    } else {
+      const asset = dndSharedState.assets.find((a) => a.id === action.id);
+      if (asset) asset.stats = action.stats;
+    }
   } else if (action.type === "select") {
-    dndSelectedId = action.id;
+    selectDndAsset(action.id, !!action.additive);
+    dndSelectedPlayerId = null;
+  } else if (action.type === "select-player") {
+    dndSelectedPlayerId = action.id;
+    dndSelectedId = null;
   } else if (action.type === "grid") {
     dndSharedState.grid = !!action.grid;
   } else if (action.type === "board") {
@@ -1242,14 +1484,84 @@ function addSelectedDndAsset() {
 }
 
 function createCustomDndAsset() {
-  const name = prompt("Asset name", "Custom Token")?.trim();
-  if (!name) return;
-  const icon = prompt("Emoji or short label", "⭐")?.trim() || "⭐";
-  const color = prompt("Color", "#4dd2ff")?.trim() || "#4dd2ff";
-  const asset = { id: `local-${Date.now()}`, name, icon: icon.slice(0, 4), color, w: 1, h: 1, role: "object", local: true };
-  dndLocalLibrary.push(asset);
+  openCustomAssetModal();
+}
+
+function buildCustomAssetPresets() {
+  const iconGrid = $("#custom-asset-icon-presets");
+  const colorGrid = $("#custom-asset-color-presets");
+  if (iconGrid && !iconGrid.children.length) {
+    for (const icon of CUSTOM_ASSET_ICONS) {
+      const btn = document.createElement("button");
+      btn.className = "asset-preset-btn";
+      btn.type = "button";
+      btn.textContent = icon;
+      btn.addEventListener("click", () => { $("#custom-asset-icon").value = icon; });
+      iconGrid.appendChild(btn);
+    }
+  }
+  if (colorGrid && !colorGrid.children.length) {
+    for (const color of CUSTOM_ASSET_COLORS) {
+      const btn = document.createElement("button");
+      btn.className = "asset-color-btn";
+      btn.type = "button";
+      btn.style.background = color;
+      btn.setAttribute("aria-label", color);
+      btn.addEventListener("click", () => { $("#custom-asset-color").value = color; });
+      colorGrid.appendChild(btn);
+    }
+  }
+}
+
+function openCustomAssetModal() {
+  buildCustomAssetPresets();
+  $("#custom-asset-name").value = "Custom Token";
+  $("#custom-asset-icon").value = "⭐";
+  $("#custom-asset-color").value = "#4dd2ff";
+  $("#custom-asset-role").value = "object";
+  $("#custom-asset-preset").value = "commoner";
+  $("#custom-asset-width").value = "1";
+  $("#custom-asset-height").value = "1";
+  $("#modal-custom-asset")?.classList.remove("hidden");
+  $("#modal-custom-asset")?.setAttribute("aria-hidden", "false");
+  setTimeout(() => $("#custom-asset-name")?.focus(), 0);
+}
+
+function closeCustomAssetModal() {
+  $("#modal-custom-asset")?.classList.add("hidden");
+  $("#modal-custom-asset")?.setAttribute("aria-hidden", "true");
+}
+
+function customAssetFromModal() {
+  const role = $("#custom-asset-role")?.value || "object";
+  const preset = $("#custom-asset-preset")?.value || "commoner";
+  const w = Math.max(0.5, Math.min(8, Number($("#custom-asset-width")?.value) || 1));
+  const h = Math.max(0.5, Math.min(8, Number($("#custom-asset-height")?.value) || 1));
+  const asset = {
+    id: `local-${Date.now()}`,
+    name: $("#custom-asset-name")?.value.trim() || "Custom Token",
+    icon: ($("#custom-asset-icon")?.value.trim() || "⭐").slice(0, 4),
+    color: $("#custom-asset-color")?.value || "#4dd2ff",
+    w,
+    h,
+    role,
+    statPreset: preset,
+    local: true,
+  };
+  if (role !== "object") asset.stats = statBlock(preset);
+  return asset;
+}
+
+function saveCustomAssetFromModal(addToBoard = false) {
+  const asset = customAssetFromModal();
+  dndLocalLibrary.push({ ...asset });
   saveDndLibrary();
   syncDndUi();
+  if (addToBoard) {
+    const board = dndSharedState.board || defaultDndState().board;
+    sendDndAction({ type: "add", asset: { ...asset, id: `${MY_ID}-${Date.now()}`, x: Math.max(0, Math.floor((board.cols - asset.w) / 2)), y: Math.max(0, Math.floor((board.rows - asset.h) / 2)) } });
+  }
+  closeCustomAssetModal();
 }
 
 function saveSelectedAssetToLibrary() {
@@ -1264,12 +1576,31 @@ function saveSelectedAssetToLibrary() {
 }
 
 function resizeSelectedDndAsset(delta) {
+  if (dndSelectedPlayerId) {
+    const current = dndSharedState.playerSizes?.[dndSelectedPlayerId] || 1;
+    const size = Math.max(0.5, Math.min(6, current + delta));
+    sendDndAction({ type: "resize-player", id: dndSelectedPlayerId, size });
+    return;
+  }
   const asset = dndSharedState.assets.find((a) => a.id === dndSelectedId);
   if (!asset) return;
   const board = dndSharedState.board || defaultDndState().board;
   const w = Math.max(0.5, Math.min(board.cols, asset.w + delta));
   const h = Math.max(0.5, Math.min(board.rows, asset.h + delta));
   sendDndAction({ type: "resize", id: asset.id, w, h });
+}
+
+function duplicateSelectedDndAsset(id = dndSelectedId) {
+  const ids = dndSelectedIds.size ? Array.from(dndSelectedIds) : (id ? [id] : []);
+  for (const assetId of ids) sendDndAction({ type: "duplicate", id: assetId });
+}
+
+function removeSelectedDndAsset(id = dndSelectedId) {
+  const ids = dndSelectedIds.size ? Array.from(dndSelectedIds) : (id ? [id] : []);
+  if (!ids.length) return;
+  if (!confirm(`Remove ${ids.length === 1 ? "this entity" : ids.length + " entities"} from Free Play?`)) return;
+  for (const assetId of ids) sendDndAction({ type: "remove", id: assetId });
+  hideDndStats();
 }
 
 function setDndBoardSize() {
@@ -1288,8 +1619,15 @@ function setDndZoom(next) {
 function syncDndUi() {
   $("#btn-dnd")?.classList.toggle("active", dndOpen);
   $("#dnd-dock")?.classList.toggle("hidden", selectedGame !== "free-play");
+  $("#inventory-dock")?.classList.toggle("hidden", selectedGame !== "free-play");
   $("#dnd-toolbar")?.classList.toggle("hidden", !dndOpen);
   $("#btn-dnd-grid")?.classList.toggle("active", !!dndSharedState.grid);
+  const hasAsset = !!dndSelectedId;
+  const hasEntity = hasAsset || !!dndSelectedPlayerId;
+  if ($("#btn-dnd-duplicate")) $("#btn-dnd-duplicate").disabled = !hasAsset;
+  if ($("#btn-dnd-remove")) $("#btn-dnd-remove").disabled = !hasAsset;
+  if ($("#btn-dnd-smaller")) $("#btn-dnd-smaller").disabled = !hasEntity;
+  if ($("#btn-dnd-larger")) $("#btn-dnd-larger").disabled = !hasEntity;
   const scene = $("#dnd-scene");
   if (scene && !scene.options.length) {
     for (const s of DND_SCENES) scene.add(new Option(s.name, s.id));
@@ -1300,6 +1638,84 @@ function syncDndUi() {
     assetSelect.innerHTML = "";
     for (const a of dndAssetCatalog()) assetSelect.add(new Option(a.local ? `★ ${a.name}` : a.name, a.id));
     if (current) assetSelect.value = current;
+  }
+}
+
+function isTypingTarget(target) {
+  const tag = target?.tagName?.toLowerCase();
+  return target?.isContentEditable || tag === "input" || tag === "textarea" || tag === "select";
+}
+
+function showDndShortcutHelp() {
+  alert([
+    "DnD shortcuts",
+    "D: toggle DnD tools",
+    "G: toggle grid",
+    "A: add selected asset",
+    "N: create custom asset",
+    "C: duplicate selected asset",
+    "Delete/Backspace: remove selected asset",
+    "+ / =: make selected entity larger",
+    "- / _: make selected entity smaller",
+    "B: board size",
+    "R: roll dice",
+    "Escape: close popup/tools",
+    "?: show this help",
+  ].join("\n"));
+}
+
+function handleDndKeyboard(e) {
+  if (selectedGame !== "free-play") return;
+  if (!$("#modal-custom-asset")?.classList.contains("hidden")) {
+    if (e.key === "Escape") closeCustomAssetModal();
+    return;
+  }
+  if (profileOpen || chatOpen) return;
+  if (isTypingTarget(e.target)) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (key === "d") {
+    e.preventDefault();
+    setDndOpen(!dndOpen);
+  } else if (key === "g") {
+    e.preventDefault();
+    sendDndAction({ type: "grid", grid: !dndSharedState.grid });
+  } else if (key === "a") {
+    e.preventDefault();
+    addSelectedDndAsset();
+  } else if (key === "n") {
+    e.preventDefault();
+    createCustomDndAsset();
+  } else if (key === "c") {
+    if (!dndSelectedId) return;
+    e.preventDefault();
+    duplicateSelectedDndAsset();
+  } else if (key === "Delete" || key === "Backspace") {
+    if (!dndSelectedId) return;
+    e.preventDefault();
+    removeSelectedDndAsset();
+  } else if (key === "+" || key === "=") {
+    if (!dndSelectedId && !dndSelectedPlayerId) return;
+    e.preventDefault();
+    resizeSelectedDndAsset(0.5);
+  } else if (key === "-" || key === "_") {
+    if (!dndSelectedId && !dndSelectedPlayerId) return;
+    e.preventDefault();
+    resizeSelectedDndAsset(-0.5);
+  } else if (key === "b") {
+    e.preventDefault();
+    setDndBoardSize();
+  } else if (key === "r") {
+    e.preventDefault();
+    requestDiceRoll();
+  } else if (key === "Escape") {
+    e.preventDefault();
+    hideDndStats();
+    setDndOpen(false);
+  } else if (key === "?") {
+    e.preventDefault();
+    showDndShortcutHelp();
   }
 }
 
@@ -1450,6 +1866,43 @@ function drawStroke(stroke, rect) {
   ctx.restore();
 }
 
+function drawDndPlayerToken(player, rect) {
+  if (player.connected === false) return;
+  const size = playerTokenSize(player);
+  const px = Math.max(28, DND_CELL_PX * dndZoom * size);
+  const x = player.x * rect.width - px / 2;
+  const y = player.y * rect.height - px / 2;
+  const selected = player.id === dndSelectedPlayerId;
+  const isMe = player.id === MY_ID;
+  ctx.save();
+  ctx.fillStyle = player.color || "#4dd2ff";
+  ctx.globalAlpha = 0.9;
+  roundRect(ctx, x + 3, y + 3, Math.max(8, px - 6), Math.max(8, px - 6), Math.min(14, px * 0.22));
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = selected ? "#fff" : isMe ? "rgba(255,255,255,0.82)" : "rgba(0,0,0,0.45)";
+  ctx.lineWidth = selected ? 4 : 2;
+  ctx.stroke();
+  ctx.font = `${Math.max(18, Math.min(54, px * 0.45))}px serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#fff";
+  ctx.fillText(player.icon || "●", x + px / 2, y + px / 2);
+  if (speaking.has(player.id)) {
+    const pulse = 0.5 + 0.5 * Math.abs(Math.sin(Date.now() / 220));
+    ctx.beginPath();
+    ctx.arc(x + px / 2, y + px / 2, px / 2 + 5 + pulse * 5, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(124,252,155,${0.5 + 0.5 * pulse})`;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+  }
+  ctx.font = "bold 11px system-ui, sans-serif";
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.fillText(hostCrown(player.id) + player.name, x + px / 2, y - 5);
+  drawStatBars(x, y + px + 12, px, dndStatsForPlayer(player));
+  ctx.restore();
+}
+
 function renderDrawing(rect) {
   for (const stroke of drawingStrokes) drawStroke(stroke, rect);
   if (currentStroke) drawStroke(currentStroke, rect);
@@ -1505,7 +1958,7 @@ function drawDndAsset(asset, m) {
   const y = m.oy + asset.y * m.cell;
   const w = asset.w * m.cell;
   const h = asset.h * m.cell;
-  const selected = asset.id === dndSelectedId;
+  const selected = asset.id === dndSelectedId || dndSelectedIds.has(asset.id);
   ctx.save();
   ctx.fillStyle = asset.color || "#4dd2ff";
   ctx.globalAlpha = 0.88;
@@ -1711,6 +2164,15 @@ function gameName(game) {
 
 async function setGameMode(game, broadcast = true, restoredState = undefined, promptHost = true) {
   const nextGame = game || "free-play";
+  if (nextGame === "lobbies") {
+    stopActiveGame();
+    selectedGame = "lobbies";
+    const select = $("#game-select");
+    if (select && select.value !== "lobbies") select.value = "lobbies";
+    show("menu");
+    refreshLobbyCards();
+    return;
+  }
   if (selectedGame === nextGame && (nextGame === "free-play" || activeGame)) return;
   stopActiveGame();
   selectedGame = nextGame;
@@ -1723,7 +2185,7 @@ async function setGameMode(game, broadcast = true, restoredState = undefined, pr
   const initialState = restoredState !== undefined
     ? restoredState
     : (promptHost && net.isHost ? promptForSavedGame(selectedGame) : savedGameStateOrNull(selectedGame));
-  await startActiveGame(initialState);
+  if (selectedGame !== "free-play") await startActiveGame(initialState);
   if (broadcast) {
     if (net.isHost) net.broadcast({ t: "game-mode", game: selectedGame });
     else net.send({ t: "game-mode", game: selectedGame });
@@ -2433,6 +2895,10 @@ cameraBtn?.addEventListener("click", (e) => {
 let profileOpen = false;
 
 function openProfileSheet() {
+  if (profileOpen) {
+    closeProfileSheet();
+    return;
+  }
   profileOpen = true;
   // Populate fields from current profile.
   $("#input-name").value = profile.name;
@@ -2441,7 +2907,13 @@ function openProfileSheet() {
   buildColorPicker();
   buildIconPicker();
   updateProfilePreview();
+  syncTopNav();
   $("#sheet-profile").classList.add("open");
+}
+
+function toggleProfileSheet() {
+  if (profileOpen) closeProfileSheet();
+  else openProfileSheet();
 }
 
 function closeProfileSheet() {
@@ -2515,6 +2987,7 @@ function hostCode(code) {
   keepPlayingAfterMigration = false;
   yieldedHostForBackground = false;
   currentLobby = { code, role: "host", name: lobbyDisplayName(code) };
+  syncTopNav();
   updateHostedLobbyInfo();
   setStatus("Hosting " + lobbyDisplayName(code) + "…");
   renderLobby();
@@ -2596,6 +3069,7 @@ function updateProfilePreview() {
   $("#preview-dot").style.background = color;
   $("#preview-dot").textContent = profile.icon;
   $("#preview-name").textContent = profile.name;
+  syncTopNav();
   updateActivityStatus();
 }
 
@@ -2664,6 +3138,7 @@ function renderLobby() {
     lobbyListKey = nextListKey;
   }
   $("#player-count").textContent = lobbyPlayers.length;
+  syncTopNav();
 }
 
 function sanitizeLobbyCode(code) {
@@ -2756,12 +3231,22 @@ function renderOnlineUsers(users = onlineUsers) {
   onlineUsers = users.filter((u) => u.id !== MY_ID);
   const count = $("#online-count");
   const list = $("#online-list");
-  if (count) count.textContent = String(onlineUsers.length + 1);
+  const lobbyPlayers = net.isHost ? Array.from(players.values()) : lastState;
+  const lobbyIds = new Set(lobbyPlayers.map((p) => p.id));
+  const byId = new Map(onlineUsers.map((u) => [u.id, u]));
+  const lobbyUsers = lobbyPlayers
+    .filter((p) => p.id !== MY_ID && p.connected !== false)
+    .map((p) => ({ ...byId.get(p.id), id: p.id, name: p.name, icon: p.icon, color: p.color, status: "In this lobby", lobby: currentLobby?.code || net.code || "" }));
+  const otherUsers = onlineUsers
+    .filter((u) => !lobbyIds.has(u.id))
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+  const sortedUsers = [...lobbyUsers, ...otherUsers];
+  if (count) count.textContent = String(lobbyPlayers.length || onlineUsers.length + 1);
   if (!list) return;
   list.innerHTML = "";
   const me = activityStatus();
   list.appendChild(onlineUserButton(me, true));
-  for (const user of onlineUsers) list.appendChild(onlineUserButton(user, false));
+  for (const user of sortedUsers) list.appendChild(onlineUserButton(user, false));
 }
 
 function onlineUserButton(user, isMe) {
@@ -2846,20 +3331,25 @@ function onDown(e) {
   const asset = dndAssetAt(boardPoint);
   if (asset && !drawMode) {
     e.preventDefault();
-    dndSelectedId = asset.id;
+    selectDndAsset(asset.id, e.shiftKey);
     const index = dndSharedState.assets.indexOf(asset);
     dndSharedState.assets.splice(index, 1);
     dndSharedState.assets.push(asset);
-    dndDrag = { id: asset.id, dx: boardPoint.x - asset.x, dy: boardPoint.y - asset.y, moved: false };
+    const dragAssets = dndSelectedIds.has(asset.id) ? selectedDndAssets() : [asset];
+    dndDrag = { id: asset.id, copy: !!e.ctrlKey, assets: dragAssets.map((a) => ({ id: a.id, x: a.x, y: a.y, dx: boardPoint.x - a.x, dy: boardPoint.y - a.y })), moved: false };
     dndPointerDown = { kind: "asset", entity: asset, x: boardPoint.x, y: boardPoint.y };
-    sendDndAction({ type: "select", id: asset.id });
+    sendDndAction({ type: "select", id: asset.id, additive: e.shiftKey });
     return;
   }
   const player = playerAtPoint(pointerToNorm(e));
   if (player && !drawMode) {
     e.preventDefault();
     const point = pointerToNorm(e);
+    dndSelectedId = null;
+    dndSelectedPlayerId = player.id;
     dndPointerDown = { kind: "player", entity: { ...player, kind: "player", stats: dndStatsForPlayer(player) }, x: boardPoint.x, y: boardPoint.y };
+    sendDndAction({ type: "select-player", id: player.id });
+    syncDndUi();
     if (player.id === MY_ID) dndPlayerDrag = { id: player.id, dx: point.x - player.x, dy: point.y - player.y, moved: false };
     return;
   }
@@ -2890,12 +3380,13 @@ function onMove(e) {
   if (dndDrag) {
     e.preventDefault();
     const point = pointerToBoard(e);
-    const asset = dndSharedState.assets.find((a) => a.id === dndDrag.id);
     const board = dndSharedState.board || defaultDndState().board;
-    if (asset) {
-      if (Math.hypot(point.x - (asset.x + dndDrag.dx), point.y - (asset.y + dndDrag.dy)) > 0.08) dndDrag.moved = true;
-      asset.x = Math.max(0, Math.min(board.cols - asset.w, Math.round((point.x - dndDrag.dx) * 2) / 2));
-      asset.y = Math.max(0, Math.min(board.rows - asset.h, Math.round((point.y - dndDrag.dy) * 2) / 2));
+    for (const dragged of dndDrag.assets || []) {
+      const asset = dndSharedState.assets.find((a) => a.id === dragged.id);
+      if (!asset) continue;
+      if (Math.hypot(point.x - (dragged.x + dragged.dx), point.y - (dragged.y + dragged.dy)) > 0.08) dndDrag.moved = true;
+      asset.x = Math.max(0, Math.min(board.cols - asset.w, Math.round((point.x - dragged.dx) * 2) / 2));
+      asset.y = Math.max(0, Math.min(board.rows - asset.h, Math.round((point.y - dragged.dy) * 2) / 2));
     }
     return;
   }
@@ -2933,10 +3424,37 @@ function onMove(e) {
     net.send({ t: "input", x, y });
   }
 }
-function onUp() {
+function onUp(e) {
   if (dndDrag) {
     const asset = dndSharedState.assets.find((a) => a.id === dndDrag.id);
-    if (asset) sendDndAction({ type: "move", id: asset.id, x: asset.x, y: asset.y });
+    if (dndDrag.moved && isInventoryOpen() && pointerOverInventory(e)) {
+      const inventoryAssets = (dndDrag.assets || []).map((a) => dndSharedState.assets.find((item) => item.id === a.id)).filter(Boolean);
+      if (dndDrag.copy) {
+        addAssetsToInventory(inventoryAssets, false);
+        for (const dragged of dndDrag.assets || []) {
+          const moved = dndSharedState.assets.find((a) => a.id === dragged.id);
+          if (moved) { moved.x = dragged.x; moved.y = dragged.y; }
+        }
+      } else {
+        addAssetsToInventory(inventoryAssets, true);
+      }
+    } else if (dndDrag.moved && dndDrag.copy) {
+      for (const dragged of dndDrag.assets || []) {
+        const moved = dndSharedState.assets.find((a) => a.id === dragged.id);
+        if (moved) {
+          const copyX = moved.x;
+          const copyY = moved.y;
+          moved.x = dragged.x;
+          moved.y = dragged.y;
+          sendDndAction({ type: "add", asset: cloneAsset(moved, { id: `${MY_ID}-${Date.now()}-${Math.random().toString(36).slice(2)}`, x: copyX, y: copyY }) });
+        }
+      }
+    } else if (dndDrag.moved) {
+      for (const dragged of dndDrag.assets || []) {
+        const moved = dndSharedState.assets.find((a) => a.id === dragged.id);
+        if (moved) sendDndAction({ type: "move", id: moved.id, x: moved.x, y: moved.y });
+      }
+    }
     if (!dndDrag.moved && asset) showDndStats({ ...asset, kind: asset.role || "asset" });
   } else if (dndPlayerDrag) {
     if (!dndPlayerDrag.moved && dndPointerDown?.entity) showDndStats(dndPointerDown.entity);
@@ -2959,6 +3477,17 @@ canvas.addEventListener("touchstart", onDown, { passive: false });
 canvas.addEventListener("touchmove",  onMove, { passive: false });
 window.addEventListener("touchend",   onUp);
 window.addEventListener("touchcancel", onUp);
+window.addEventListener("keydown", handleDndKeyboard);
+canvas.addEventListener("dragover", (e) => {
+  if (selectedGame !== "free-play" || !dndInventoryDrag) return;
+  e.preventDefault();
+});
+canvas.addEventListener("drop", (e) => {
+  if (selectedGame !== "free-play" || !dndInventoryDrag) return;
+  e.preventDefault();
+  addInventoryItemToBoard(dndInventoryDrag, pointerToBoard(e));
+  dndInventoryDrag = null;
+});
 
 function renderFreePlayFrame() {
   const rect = syncCanvasSize();
@@ -2966,45 +3495,7 @@ function renderFreePlayFrame() {
   renderDndBoard(rect);
   renderDrawing(rect);
 
-  for (const p of lastState) {
-    const x = p.x * rect.width;
-    const y = p.y * rect.height;
-    const isMe = p.id === MY_ID;
-
-    // Dot
-    ctx.beginPath();
-    ctx.arc(x, y, 24, 0, Math.PI * 2);
-    ctx.fillStyle = p.color;
-    ctx.fill();
-    if (isMe) {
-      ctx.lineWidth   = 3;
-      ctx.strokeStyle = "#fff";
-      ctx.stroke();
-    }
-
-    // Icon emoji inside dot
-    ctx.font          = "20px serif";
-    ctx.textAlign     = "center";
-    ctx.textBaseline  = "middle";
-    ctx.fillText(p.icon || "●", x, y);
-
-    // Speaking ring (pulses when live voice is active)
-    if (speaking.has(p.id)) {
-      const pulse = 0.5 + 0.5 * Math.abs(Math.sin(Date.now() / 220));
-      ctx.beginPath();
-      ctx.arc(x, y, 28 + pulse * 5, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(124,252,155,${0.5 + 0.5 * pulse})`;
-      ctx.lineWidth = 3;
-      ctx.stroke();
-    }
-
-    // Name above dot
-    ctx.font          = "bold 11px system-ui, sans-serif";
-    ctx.textBaseline  = "alphabetic";
-    ctx.fillStyle     = "rgba(255,255,255,0.85)";
-    ctx.fillText(hostCrown(p.id) + p.name, x, y - 32);
-    drawStatBars(x - 24, y + 28, 48, dndStatsForPlayer(p));
-  }
+  for (const p of lastState) drawDndPlayerToken(p, rect);
   renderDiceOverlay(rect);
 }
 
@@ -3031,11 +3522,15 @@ $("#btn-draw-undo")?.addEventListener("click", undoDrawing);
 $("#btn-draw-redo")?.addEventListener("click", redoDrawing);
 $("#btn-draw-clear")?.addEventListener("click", clearDrawingWithConfirmation);
 $("#btn-dnd")?.addEventListener("click", () => setDndOpen(!dndOpen));
+$("#btn-inventory")?.addEventListener("click", () => setInventoryOpen(!isInventoryOpen()));
+$("#btn-inventory-close")?.addEventListener("click", () => setInventoryOpen(false));
 $("#btn-dnd-grid")?.addEventListener("click", () => sendDndAction({ type: "grid", grid: !dndSharedState.grid }));
 $("#dnd-scene")?.addEventListener("change", (e) => setDndScene(e.target.value));
 $("#btn-dnd-add")?.addEventListener("click", addSelectedDndAsset);
 $("#btn-dnd-custom")?.addEventListener("click", createCustomDndAsset);
 $("#btn-dnd-save")?.addEventListener("click", saveSelectedAssetToLibrary);
+$("#btn-dnd-duplicate")?.addEventListener("click", () => duplicateSelectedDndAsset());
+$("#btn-dnd-remove")?.addEventListener("click", () => removeSelectedDndAsset());
 $("#btn-dnd-smaller")?.addEventListener("click", () => resizeSelectedDndAsset(-0.5));
 $("#btn-dnd-larger")?.addEventListener("click", () => resizeSelectedDndAsset(0.5));
 $("#btn-dnd-board")?.addEventListener("click", setDndBoardSize);
@@ -3043,7 +3538,13 @@ $("#btn-dnd-zoom-out")?.addEventListener("click", () => setDndZoom(dndZoom - 0.1
 $("#btn-dnd-zoom-in")?.addEventListener("click", () => setDndZoom(dndZoom + 0.15));
 $("#btn-dnd-roll")?.addEventListener("click", requestDiceRoll);
 $("#btn-dnd-stats-close")?.addEventListener("click", hideDndStats);
-const startupGame = rememberedGameOrDefault() || $("#game-select")?.value || "free-play";
+$("#btn-custom-asset-close")?.addEventListener("click", closeCustomAssetModal);
+$("#btn-custom-asset-save")?.addEventListener("click", () => saveCustomAssetFromModal(false));
+$("#btn-custom-asset-add")?.addEventListener("click", () => saveCustomAssetFromModal(true));
+$("#modal-custom-asset")?.addEventListener("click", (e) => {
+  if (e.target?.id === "modal-custom-asset") closeCustomAssetModal();
+});
+const startupGame = shouldRestorePlay() ? (rememberedGameOrDefault() || "free-play") : "lobbies";
 setGameMode(startupGame).catch(console.error);
 syncDrawToolUi();
 syncDndUi();
@@ -3059,9 +3560,9 @@ $("#code-input")?.addEventListener("input", (e) => {
 });
 
 // ============================================================ PROFILE ACTIONS
-$("#btn-profile").addEventListener("click", openProfileSheet);
-$("#btn-lobby-settings").addEventListener("click", openProfileSheet);
-$("#btn-menu-settings")?.addEventListener("click", openProfileSheet);
+$("#btn-profile").addEventListener("click", toggleProfileSheet);
+$("#btn-lobby-settings").addEventListener("click", toggleProfileSheet);
+$("#btn-menu-settings")?.addEventListener("click", toggleProfileSheet);
 $("#btn-close-profile").addEventListener("click", closeProfileSheet);
 $("#menu-version").textContent = `Version ${APP_VERSION}`;
 $("#app-version").textContent = APP_VERSION;

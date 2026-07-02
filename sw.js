@@ -1,17 +1,17 @@
-const APP_VERSION = "2.6.3";
+const APP_VERSION = "2.7.5";
 const CACHE_NAME = `browserp2p-${APP_VERSION}`;
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./css/style.css?v=2.6.3",
-  "./js/app.js?v=2.6.3",
-  "./js/games/digger.js?v=2.6.3",
-  "./js/games/air-hockey.js?v=2.6.3",
-  "./js/games/paint-panic.js?v=2.6.3",
-  "./js/games/tower.js?v=2.6.3",
-  "./js/games/snow-brawl.js?v=2.6.3",
-  "./js/games/gentle-rain.js?v=2.6.3",
-  "./js/peer-net.js?v=2.6.3",
+  "./css/style.css?v=2.7.5",
+  "./js/app.js?v=2.7.5",
+  "./js/games/digger.js?v=2.7.5",
+  "./js/games/air-hockey.js?v=2.7.5",
+  "./js/games/paint-panic.js?v=2.7.5",
+  "./js/games/tower.js?v=2.7.5",
+  "./js/games/snow-brawl.js?v=2.7.5",
+  "./js/games/gentle-rain.js?v=2.7.5",
+  "./js/peer-net.js?v=2.7.5",
   "./manifest.webmanifest",
   "./icons/robot.svg"
 ];

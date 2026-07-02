@@ -8,9 +8,32 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/robot.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icons/robot.svg" />
-  <link rel="stylesheet" href="css/style.css?v=2.6.3" />
+  <link rel="stylesheet" href="css/style.css?v=2.7.5" />
 </head>
 <body>
+  <nav id="top-navbar" class="top-navbar" aria-label="Main navigation">
+    <label class="game-picker" for="game-select">
+      <span>Game</span>
+      <select id="game-select" aria-label="Choose game">
+        <option value="lobbies">Lobbies</option>
+        <option value="free-play">Free play</option>
+        <option value="digger">Deep Digger</option>
+        <option value="air-hockey">Air Hockey</option>
+        <option value="paint-panic">Paint Panic</option>
+        <option value="tower">Tower Tumble</option>
+        <option value="snow-brawl">Snow Brawl Royale</option>
+        <option value="gentle-rain">A Gentle Rain</option>
+      </select>
+    </label>
+    <button id="btn-chat" class="menu-icon-btn hidden" aria-label="Chat" type="button">
+      💬<span id="chat-badge" class="badge hidden">0</span>
+    </button>
+    <details id="online-dropdown" class="online-dropdown">
+      <summary aria-label="Active players">👥<span id="online-count">1</span></summary>
+      <div id="online-list" class="online-list"></div>
+    </details>
+    <button id="btn-profile" class="menu-icon-btn menu-settings-btn" aria-label="Settings" type="button"><span id="nav-avatar">⚙️</span></button>
+  </nav>
   <div id="app">
 
     <!-- ===== Menu ===== -->
@@ -53,26 +76,6 @@
 
     <!-- ===== Play ===== -->
     <section id="screen-play" class="screen">
-      <div class="play-menu-bar" aria-label="Play controls">
-        <label class="game-picker" for="game-select">
-          <span>Game</span>
-          <select id="game-select" aria-label="Choose game">
-            <option value="free-play">Free play</option>
-            <option value="digger">Deep Digger</option>
-            <option value="air-hockey">Air Hockey</option>
-            <option value="paint-panic">Paint Panic</option>
-            <option value="tower">Tower Tumble</option>
-            <option value="snow-brawl">Snow Brawl Royale</option>
-            <option value="gentle-rain">A Gentle Rain</option>
-          </select>
-        </label>
-        <button id="btn-camera" class="menu-icon-btn" aria-label="Camera" type="button">📹</button>
-        <button id="btn-mic" class="menu-icon-btn" aria-label="Record voice" type="button">🎤</button>
-        <button id="btn-chat" class="menu-icon-btn" aria-label="Chat" type="button">
-          💬<span id="chat-badge" class="badge hidden">0</span>
-        </button>
-        <button id="btn-profile" class="menu-icon-btn menu-settings-btn" aria-label="Settings" type="button">⚙️</button>
-      </div>
       <div id="draw-dock" class="draw-dock" aria-label="Drawing tools">
         <button id="btn-draw" class="draw-main-btn" aria-label="Draw mode" type="button">✏️</button>
         <div id="draw-toolbar" class="draw-toolbar hidden" aria-label="Drawing tools">
@@ -90,6 +93,9 @@
           <button id="btn-draw-clear" class="draw-tool-btn draw-clear-btn" type="button" aria-label="Clear all drawings">🗑️</button>
         </div>
       </div>
+        <div id="inventory-dock" class="inventory-dock hidden" aria-label="Inventory">
+          <button id="btn-inventory" class="draw-main-btn" aria-label="Inventory" type="button">💰</button>
+        </div>
         <div id="dnd-dock" class="dnd-dock" aria-label="DnD board tools">
           <button id="btn-dnd" class="draw-main-btn" aria-label="DnD tools" type="button">⚔️</button>
           <div id="dnd-toolbar" class="dnd-toolbar hidden" aria-label="DnD tools">
@@ -99,6 +105,8 @@
             <button id="btn-dnd-add" class="dnd-tool-btn" type="button" aria-label="Add selected asset">Add</button>
             <button id="btn-dnd-custom" class="dnd-tool-btn" type="button" aria-label="Create asset">New</button>
             <button id="btn-dnd-save" class="dnd-tool-btn" type="button" aria-label="Save selected asset to local library">Save</button>
+            <button id="btn-dnd-duplicate" class="dnd-tool-btn" type="button" aria-label="Duplicate selected entity">Copy</button>
+            <button id="btn-dnd-remove" class="dnd-tool-btn dnd-danger-btn" type="button" aria-label="Remove selected entity">Remove</button>
             <button id="btn-dnd-smaller" class="dnd-tool-btn" type="button" aria-label="Make selected asset smaller">−</button>
             <button id="btn-dnd-larger" class="dnd-tool-btn" type="button" aria-label="Make selected asset larger">＋</button>
             <button id="btn-dnd-board" class="dnd-tool-btn" type="button" aria-label="Set board size">Board</button>
@@ -117,6 +125,14 @@
             <button id="btn-dnd-roll" class="dnd-tool-btn dnd-roll-btn" type="button" aria-label="Roll dice">Roll</button>
           </div>
         </div>
+      <div id="inventory-panel" class="inventory-panel hidden" aria-label="Local inventory">
+        <div class="inventory-header">
+          <span>Inventory</span>
+          <button id="btn-inventory-close" class="close-btn" aria-label="Close inventory" type="button">✕</button>
+        </div>
+        <p class="inventory-hint">Drag board items here. Drag items back to the board.</p>
+        <div id="inventory-list" class="inventory-list"></div>
+      </div>
       <div id="video-tray" class="video-tray" aria-live="polite"></div>
       <canvas id="stage"></canvas>
       <div id="dnd-stats-card" class="dnd-stats-card hidden" aria-live="polite">
@@ -130,6 +146,8 @@
         <div id="dnd-stats-bars" class="dnd-stats-bars"></div>
         <div id="dnd-stats-abilities" class="dnd-stats-abilities"></div>
         <div id="dnd-stats-details" class="dnd-stats-details"></div>
+        <div id="dnd-stats-editor" class="dnd-stats-editor"></div>
+        <div id="dnd-stats-actions" class="dnd-stats-actions"></div>
       </div>
     </section>
 
@@ -193,23 +211,22 @@
       <div class="field-group app-update-group">
           <label>App</label>
           <div class="version-row">
-              <span>Version <strong id="app-version">2.6.3</strong></span>
+              <span>Version <strong id="app-version">2.7.5</strong></span>
               <button id="btn-check-update" class="btn btn-small" type="button">Check for updates</button>
           </div>
           <p id="update-status" class="status"></p>
       </div>
   </div>
 
-  <details id="online-dropdown" class="online-dropdown">
-    <summary><span id="online-count">0</span> online</summary>
-    <div id="online-list" class="online-list"></div>
-  </details>
-
   <!-- ===== Chat panel (slides up from bottom) ===== -->
   <div id="panel-chat" class="chat-panel" aria-hidden="true">
     <div class="chat-header">
       <span>Chat</span>
       <button id="btn-close-chat" class="close-btn" aria-label="Close">✕</button>
+    </div>
+    <div class="chat-media-actions" aria-label="Chat media controls">
+      <button id="btn-mic" class="menu-icon-btn" aria-label="Record voice" type="button">🎤</button>
+      <button id="btn-camera" class="menu-icon-btn" aria-label="Camera" type="button">📹</button>
     </div>
     <div id="chat-log" class="chat-log"></div>
     <div class="chat-input-row">
@@ -219,18 +236,81 @@
     </div>
   </div>
 
+  <!-- ===== Custom asset modal ===== -->
+  <div id="modal-custom-asset" class="modal-backdrop hidden" aria-hidden="true">
+    <div class="modal-card custom-asset-modal" role="dialog" aria-modal="true" aria-labelledby="custom-asset-title">
+      <div class="modal-header">
+        <h2 id="custom-asset-title">New custom asset</h2>
+        <button id="btn-custom-asset-close" class="close-btn" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="field-group">
+        <label for="custom-asset-name">Name</label>
+        <input id="custom-asset-name" class="text-input" type="text" maxlength="28" autocomplete="off" placeholder="Goblin Scout" />
+      </div>
+      <div class="field-group">
+        <label for="custom-asset-icon">Icon</label>
+        <input id="custom-asset-icon" class="text-input" type="text" maxlength="4" autocomplete="off" placeholder="⭐" />
+        <div id="custom-asset-icon-presets" class="asset-preset-grid"></div>
+      </div>
+      <div class="field-group">
+        <label>Color</label>
+        <input id="custom-asset-color" class="text-input" type="color" value="#4dd2ff" />
+        <div id="custom-asset-color-presets" class="asset-preset-grid color-presets"></div>
+      </div>
+      <div class="custom-asset-row">
+        <div class="field-group">
+          <label for="custom-asset-role">Role</label>
+          <select id="custom-asset-role" class="text-input">
+            <option value="object">Object</option>
+            <option value="enemy">Enemy</option>
+            <option value="player">Ally</option>
+            <option value="boss">Boss</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="custom-asset-preset">Stats</label>
+          <select id="custom-asset-preset" class="text-input">
+            <option value="commoner">Commoner</option>
+            <option value="fighter">Fighter</option>
+            <option value="rogue">Rogue</option>
+            <option value="caster">Caster</option>
+            <option value="goblin">Goblin</option>
+            <option value="orc">Orc</option>
+            <option value="skeleton">Skeleton</option>
+            <option value="dragon">Dragon</option>
+            <option value="lich">Lich</option>
+          </select>
+        </div>
+      </div>
+      <div class="custom-asset-row">
+        <div class="field-group">
+          <label for="custom-asset-width">Width</label>
+          <input id="custom-asset-width" class="text-input" type="number" min="0.5" max="8" step="0.5" value="1" />
+        </div>
+        <div class="field-group">
+          <label for="custom-asset-height">Height</label>
+          <input id="custom-asset-height" class="text-input" type="number" min="0.5" max="8" step="0.5" value="1" />
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-custom-asset-save" class="btn" type="button">Save to library</button>
+        <button id="btn-custom-asset-add" class="btn btn-primary" type="button">Add to board</button>
+      </div>
+    </div>
+  </div>
+
   <!-- WebRTC wrapper + free signaling broker -->
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <!-- QR code rendering for the join link -->
   <script src="https://cdn.jsdelivr.net/gh/davidshimjs/qrcodejs/qrcode.min.js"></script>
 
-  <script src="js/peer-net.js?v=2.6.3"></script>
-  <script src="js/games/digger.js?v=2.6.3"></script>
-  <script src="js/games/air-hockey.js?v=2.6.3"></script>
-  <script src="js/games/paint-panic.js?v=2.6.3"></script>
-  <script src="js/games/tower.js?v=2.6.3"></script>
-  <script src="js/games/snow-brawl.js?v=2.6.3"></script>
-  <script src="js/games/gentle-rain.js?v=2.6.3"></script>
-  <script src="js/app.js?v=2.6.3"></script>
+  <script src="js/peer-net.js?v=2.7.5"></script>
+  <script src="js/games/digger.js?v=2.7.5"></script>
+  <script src="js/games/air-hockey.js?v=2.7.5"></script>
+  <script src="js/games/paint-panic.js?v=2.7.5"></script>
+  <script src="js/games/tower.js?v=2.7.5"></script>
+  <script src="js/games/snow-brawl.js?v=2.7.5"></script>
+  <script src="js/games/gentle-rain.js?v=2.7.5"></script>
+  <script src="js/app.js?v=2.7.5"></script>
 </body>
 </html>
