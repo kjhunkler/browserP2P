@@ -43,7 +43,7 @@ const ICONS = [
   "🎮","🎯","🎲","🍕","🌮","🏆",
 ];
 const TICK_HZ = 20;
-const APP_VERSION = "2.9.1";
+const APP_VERSION = "2.9.2";
 const HOST_THROTTLE_DRIFT_MS = 1200;
 const HOST_THROTTLE_STRIKES = 2;
 const LAST_GAME_KEY = "bp2p-last-game";
@@ -53,9 +53,9 @@ const LAST_CODE_KEY = "bp2p-last-code";
 
 const ELEMENTAL_LOBBIES = [
   { id: "FIRE", name: "Fire", icon: "🔥" },
-  { id: "EARTH", name: "Earth", icon: "⛰️" },
-  { id: "WATER", name: "Water", icon: "💧" },
-  { id: "AIR", name: "Air", icon: "🌬️" },
+  { id: "EART", name: "Earth", icon: "⛰️" },
+  { id: "WATE", name: "Water", icon: "💧" },
+  { id: "WIND", name: "Air", icon: "🌬️" },
 ];
 
 // Channel scopes the legacy host migration id. Empty = global default.
@@ -533,10 +533,18 @@ function wireNetEvents() {
     migrationPending = false;
     setStatus("Connection error: " + (err.type === "unavailable-id" ? "That lobby is already hosted." : (err.type || err.message || err)));
     if (err.type === "unavailable-id" && currentLobby?.role === "host") {
-      clearCurrentLobby();
-      hasLeftLobby = true;
-      show("menu");
-      refreshLobbyCards();
+      const code = sanitizeLobbyCode(currentLobby.code);
+      showToast(`${lobbyDisplayName(code)} is already hosted — joining instead…`, "info", "🔗");
+      setStatus("Joining " + lobbyDisplayName(code) + "…");
+      setTimeout(() => {
+        if (code) joinLobbyCode(code);
+        else {
+          clearCurrentLobby();
+          hasLeftLobby = true;
+          show("menu");
+          refreshLobbyCards();
+        }
+      }, 250);
     }
   });
 

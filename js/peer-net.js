@@ -211,23 +211,29 @@ class PeerNet {
     return new Promise((resolve) => {
       const peer = new Peer({ debug: 0 });
       let done = false;
+      let openFallback = null;
       const finish = (result) => {
         if (done) return;
         done = true;
         clearTimeout(timer);
+        clearTimeout(openFallback);
         try { conn?.close?.(); } catch {}
         try { peer.destroy(); } catch {}
         resolve(result);
       };
       let conn = null;
+      let connOpened = false;
       const timer = setTimeout(() => finish({ online: false }), timeoutMs);
       peer.on("open", () => {
         conn = peer.connect(PREFIX + code, { label: "probe", reliable: true });
-        conn.on("open", () => {});
+        conn.on("open", () => {
+          connOpened = true;
+          openFallback = setTimeout(() => finish({ online: true, info: null, code }), 350);
+        });
         conn.on("data", (data) => {
           if (data?.t === INTERNAL && data.kind === "lobby-info") finish({ online: true, info: data.info || {}, code: data.code || code });
         });
-        conn.on("close", () => finish({ online: false }));
+        conn.on("close", () => finish(connOpened ? { online: true, info: null, code } : { online: false }));
         conn.on("error", () => finish({ online: false }));
       });
       peer.on("error", () => finish({ online: false }));
